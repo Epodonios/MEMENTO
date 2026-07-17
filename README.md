@@ -102,7 +102,7 @@ TWdqYu5H6emRHd6jFfkHjfG8Yg2285DFmT
 ## 📦 دانلود و نصب
 
 ### روش ۱: نسخه آماده (پرتابل)
-1. به صفحه [Releases](https://github.com/yourusername/memento/releases) بروید.
+1. به صفحه [Releases](https://github.com/Epodonios/memento/releases) بروید.
 2. فایل `MEMENTO.exe` را دانلود کنید (پرتابل، بدون نیاز به نصب).
 3. اجرا کنید و لذت ببرید!
 
