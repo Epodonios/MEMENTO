@@ -1,3 +1,8 @@
+
+# [English](https://github.com/Epodonios/MEMENTO/blob/main/Readme-EN.md) | [Chinese](https://github.com/Epodonios/MEMENTO/blob/main/Readme-CH.md) | [Arabic](https://github.com/Epodonios/MEMENTO/blob/main/Readme-AR.md)
+
+
+
 <div align="center">
 
 # 🌟 MEMENTO V2Ray Config Editor 🚀
