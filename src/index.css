@@ -1,0 +1,413 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Neutral black-green surface scale (used for backgrounds & text) */
+  --color-surface-0: #ffffff;
+  --color-surface-50: #f6f8f6;
+  --color-surface-100: #e8ede9;
+  --color-surface-200: #ccd6ce;
+  --color-surface-300: #a3b3a6;
+  --color-surface-400: #74877a;
+  --color-surface-500: #54675a;
+  --color-surface-600: #3e4f43;
+  --color-surface-700: #2c3a30;
+  --color-surface-800: #1a241d;
+  --color-surface-900: #0e1610;
+  --color-surface-950: #050806;
+
+  /* Alias ink to the same neutral scale */
+  --color-ink-50: #f6f8f6;
+  --color-ink-100: #e8ede9;
+  --color-ink-200: #ccd6ce;
+  --color-ink-300: #a3b3a6;
+  --color-ink-400: #74877a;
+  --color-ink-500: #54675a;
+  --color-ink-600: #3e4f43;
+  --color-ink-700: #2c3a30;
+  --color-ink-800: #1a241d;
+  --color-ink-900: #0e1610;
+  --color-ink-950: #050806;
+
+  --color-accent: #22c55e;
+  --color-accent-bright: #4ade80;
+  --color-accent-glow: #16a34a;
+}
+
+* {
+  scrollbar-width: thin;
+}
+
+.dark * {
+  scrollbar-color: #22c55e44 transparent;
+}
+
+.light * {
+  scrollbar-color: #16a34a55 transparent;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(#22c55e88, #16a34a88);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(#22c55e, #16a34a);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html, body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.45s ease, color 0.45s ease;
+  /* Native app feel: disable text selection and callouts */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Allow selection only where it makes sense */
+input, textarea, [contenteditable], pre, code,
+.allow-select, .allow-select *, .code-textarea {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+}
+
+/* ============= DARK THEME (Green/Black) ============= */
+.dark body {
+  background-color: #050806;
+  color: #c7d1c7;
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% -10%, rgba(34, 197, 94, 0.12), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 100% 10%, rgba(22, 163, 74, 0.10), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 50% 110%, rgba(34, 197, 94, 0.08), transparent 60%);
+  background-attachment: fixed;
+}
+
+/* ============= LIGHT THEME (Soft green) ============= */
+.light body {
+  background-color: #f6f7f6;
+  color: #1a221c;
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% -10%, rgba(34, 197, 94, 0.10), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 100% 10%, rgba(22, 163, 74, 0.08), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* ============= Glass morphism ============= */
+.glass {
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+}
+
+.dark .glass {
+  background: rgba(13, 19, 15, 0.7);
+  border: 1px solid rgba(34, 197, 94, 0.12);
+}
+
+.light .glass {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(34, 197, 94, 0.18);
+}
+
+/* ============= Gradient text ============= */
+.gradient-text {
+  background: linear-gradient(120deg, #4ade80, #22c55e, #16a34a, #4ade80);
+  background-size: 250% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmerText 4s linear infinite;
+}
+
+@keyframes shimmerText {
+  to { background-position: 250% center; }
+}
+
+/* ============= Animated gradient border ============= */
+.gradient-border {
+  position: relative;
+}
+
+.gradient-border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, #22c55e, #16a34a, #4ade80, #22c55e);
+  background-size: 300% 300%;
+  animation: gradientShift 5s ease infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* ============= Code editor ============= */
+.code-textarea {
+  font-family: var(--font-mono);
+  tab-size: 2;
+}
+
+/* ============= Glow effects ============= */
+.glow-green {
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.25), 0 0 40px rgba(34, 197, 94, 0.1);
+}
+
+.glow-green-strong {
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.5), 0 0 50px rgba(34, 197, 94, 0.25);
+}
+
+.pulse-glow {
+  animation: pulseGlow 2.4s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 8px rgba(34, 197, 94, 0.3); }
+  50% { box-shadow: 0 0 28px rgba(34, 197, 94, 0.7), 0 0 50px rgba(34, 197, 94, 0.3); }
+}
+
+/* ============= Entrance animations ============= */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+/* Alias as a Tailwind-style utility name — several components use
+   "animate-fade-in" (modals, the expanding config row, etc.) which is not
+   one of Tailwind's built-in utilities and was previously silently doing
+   nothing. */
+.animate-fade-in { animation: fadeIn 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.slide-in { animation: slideIn 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.scale-in { animation: scaleIn 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+
+@keyframes popIn {
+  0% { opacity: 0; transform: scale(0.8) translateY(8px); }
+  60% { opacity: 1; transform: scale(1.04) translateY(0); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.pop-in { animation: popIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+/* Staggered children */
+.stagger > * {
+  opacity: 0;
+  animation: fadeIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.stagger > *:nth-child(1) { animation-delay: 0.03s; }
+.stagger > *:nth-child(2) { animation-delay: 0.08s; }
+.stagger > *:nth-child(3) { animation-delay: 0.13s; }
+.stagger > *:nth-child(4) { animation-delay: 0.18s; }
+.stagger > *:nth-child(5) { animation-delay: 0.23s; }
+.stagger > *:nth-child(6) { animation-delay: 0.28s; }
+.stagger > *:nth-child(7) { animation-delay: 0.33s; }
+.stagger > *:nth-child(8) { animation-delay: 0.38s; }
+
+/* ============= Hover lift ============= */
+.hover-lift {
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+}
+
+/* ============= Shine sweep ============= */
+.shine {
+  position: relative;
+  overflow: hidden;
+}
+.shine::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(120deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.6s ease;
+}
+.shine:hover::after {
+  left: 150%;
+}
+
+/* ============= Animated grid background ============= */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(34, 197, 94, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 197, 94, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ============= Ping radar animation ============= */
+@keyframes radar {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.radar-ring {
+  animation: radar 1.6s ease-out infinite;
+}
+
+/* ============= Spin ============= */
+@keyframes spinSlow {
+  to { transform: rotate(360deg); }
+}
+.spin-slow { animation: spinSlow 8s linear infinite; }
+
+/* ============= Float ============= */
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.floaty { animation: floaty 4s ease-in-out infinite; }
+
+/* ============= Blink/scan line ============= */
+@keyframes scanLine {
+  0% { transform: translateY(-100%); opacity: 0; }
+  50% { opacity: 1; }
+  100% { transform: translateY(1000%); opacity: 0; }
+}
+.scan-line {
+  animation: scanLine 2s linear infinite;
+}
+
+/* ============= Eye blink ============= */
+@keyframes eyeBlink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+
+/* ============= Number count flash ============= */
+@keyframes flashGreen {
+  0% { color: #4ade80; }
+  100% { color: inherit; }
+}
+.flash-green { animation: flashGreen 0.6s ease; }
+
+/* RTL support */
+[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}
+
+/* Selection */
+::selection {
+  background: rgba(34, 197, 94, 0.3);
+  color: inherit;
+}
+
+/* Focus ring color override */
+*:focus {
+  outline: none;
+}
+
+/* ============= RESPONSIVE PADDING ============= */
+@media (max-width: 640px) {
+  .p-6 {
+    padding: 1rem !important;
+  }
+  .p-5 {
+    padding: 1rem !important;
+  }
+  .gap-6 {
+    gap: 1rem !important;
+  }
+  .gap-4 {
+    gap: 0.75rem !important;
+  }
+  .text-2xl {
+    font-size: 1.25rem !important;
+    line-height: 1.5rem !important;
+  }
+  .text-xl {
+    font-size: 1.05rem !important;
+  }
+  /* Make tables horizontally scrollable on small screens */
+  table {
+    font-size: 0.75rem;
+  }
+  /* Allow long mono text to wrap */
+  pre, .code-textarea {
+    word-break: break-all;
+    font-size: 0.7rem !important;
+  }
+  /* Reduce huge button paddings on mobile */
+  .py-3\.5, .py-4 {
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+}
+
+/* Tablets: shrink some title sizes */
+@media (max-width: 1023px) and (min-width: 641px) {
+  .text-2xl {
+    font-size: 1.35rem !important;
+  }
+}
+
+/* Touch-friendly tap targets on all small devices */
+@media (hover: none) and (pointer: coarse) {
+  button, a, label {
+    min-height: 36px;
+  }
+  .hover-lift:hover {
+    transform: none;
+  }
+}
+
+/* Prevent horizontal scroll caused by huge code strings */
+body {
+  overflow-x: hidden;
+}
+
+
+
+/* Ensure long URLs / IPs wrap on small screens */
+.break-anywhere {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+/* ============= CUSTOM WHITE CURSOR ============= */
+/* Sleek white cursor across the entire application window. */
+html, body, #root, #root * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M8 2l12 11.2-5.8.5 3.3 7.3-2.2 1-3.2-7.3L8 18.5V2z' fill='white'/%3E%3Cpath d='M8 2l12 11.2-5.8.5 3.3 7.3-2.2 1-3.2-7.3L8 18.5V2z' stroke='%23000' stroke-width='0.8' fill='none'/%3E%3C/svg%3E") 4 2, auto;
+}
+
+/* Interactive elements keep the same white cursor with pointer fallback. */
+button, a, [role="button"], input, textarea, select, label,
+summary, details, [tabindex]:not([tabindex="-1"]),
+.cursor-pointer {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M8 2l12 11.2-5.8.5 3.3 7.3-2.2 1-3.2-7.3L8 18.5V2z' fill='white'/%3E%3Cpath d='M8 2l12 11.2-5.8.5 3.3 7.3-2.2 1-3.2-7.3L8 18.5V2z' stroke='%23000' stroke-width='0.8' fill='none'/%3E%3C/svg%3E") 4 2, pointer;
+}

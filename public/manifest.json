@@ -1,0 +1,10 @@
+{
+  "name": "MEMENTO — V2Ray Config Editor",
+  "short_name": "MEMENTO",
+  "description": "MEMENTO by Epodonios - a modern V2Ray configuration editor: import, edit IP/port, manage, and export proxy configurations",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#6366f1",
+  "icons": []
+}
