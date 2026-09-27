@@ -1,0 +1,50 @@
+{
+  "name": "memento-electron",
+  "productName": "MEMENTO",
+  "private": true,
+  "version": "3.2.0",
+  "description": "V2Ray Config Editor by Epodonios",
+  "author": "Epodonios",
+  "license": "MIT",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "sync:resources": "node scripts/sync-resources.js",
+    "make:icon": "node scripts/make-icon.js",
+    "dev": "concurrently -k -s first \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build:frontend": "vite build",
+    "build:main": "tsc -p tsconfig.json",
+    "prebuild": "npm run sync:resources",
+    "build": "npm run build:frontend && npm run build:main",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:dir": "npm run build && electron-builder --win --x64 --dir"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "node-forge": "^1.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.17",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "22.19.17",
+    "@types/node-forge": "^1.3.14",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.0",
+    "tailwindcss": "4.1.17",
+    "typescript": "5.9.3",
+    "vite": "7.3.2",
+    "vite-plugin-singlefile": "2.3.0",
+    "wait-on": "^9.0.3"
+  },
+  "allowScripts": {
+    "esbuild@0.27.7": true,
+    "electron@44.3.0": true
+  }
+}

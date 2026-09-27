@@ -1,0 +1,85 @@
+# MEMENTO — electron-builder configuration
+# Windows artifacts:
+#   1. MEMENTO-<version>.exe      — the portable exe
+#   2. MementoSetup-<version>.exe — produced by ../setup-app (the
+#      design-exact wizard with the real install pipeline: destination
+#      choice, per-user install, Add/Remove Programs entry, full
+#      uninstaller preserving userData, run-after-finish). The old NSIS
+#      target is retired — setup-app REPLACES it.
+
+appId: com.epodonios.memento
+productName: MEMENTO
+copyright: V2Ray Config Editor by Epodonios
+
+directories:
+  output: release
+  buildResources: build
+
+# Application code that goes inside the asar archive.
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+
+# FIELD REPORT #3 (setup 2.0.5): Windows Defender scans INSIDE Electron
+# app.asar archives (publicized AMSI capability). 3.1.7's single 4.1 MB
+# app.asar — one opaque unsigned blob containing the MHRV engine's
+# certutil/PowerShell/netsh literals — was quarantined during SFX
+# extraction on a real machine BEFORE the setup's contract gate could run
+# (18:55:08 init → 18:55:08 missing app.asar). An UNPACKED app/ directory
+# removes that single point of failure:
+#   - no archive left for an asar-specific content verdict to kill
+#   - a per-file quarantine costs ONE small file, which the setup's
+#     verify+heal pass (2.0.4) restores from staging automatically
+#   - the contract gate names the exact missing file instead of losing
+#     the whole app at once
+# HONEST NOTE: this is blast-radius reduction, NOT an antivirus-proof
+# guarantee — individual files can still be flagged, and code signing
+# remains the only real fix. Electron loads resources/app/ natively when
+# resources/app.asar is absent — no loader change needed (verified: zero
+# app.asar references in electron/*.ts).
+asar: false
+
+# xray.exe / geoip.dat / geosite.dat / spoofing-patt/ / domain-fronting/
+# must stay OUTSIDE the asar archive because they are executed directly.
+# After packaging they are resolvable at process.resourcesPath/resources/...
+# Phase D4: the tray icon files join them (electron/tray.ts resolves
+# resourcesPath/icon.ico on Windows, icon.png elsewhere; dev builds read
+# build/ directly).
+extraResources:
+  - from: resources
+    to: resources
+    filter:
+      - "**/*"
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon.png
+    to: icon.png
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  # Chromium locale .paks the app never shows (all UI text ships inside the
+  # renderer) — trimming them saves ~48 MB raw in the portable exe.
+  electronLanguages:
+    - en-US
+  # Standing contract (disclosed): no code signing certificate exists for
+  # this project; editing exe resources on Linux needs wine. Skipping BOTH
+  # keeps the build reproducible in the sandbox — the icon still rides via
+  # build/icon.ico extraResource AND is embedded into the exe post-build by
+  # scripts/embed-icon.mjs (pure-JS resedit — no wine), which is what makes
+  # the Windows shortcut icon correct in 3.1.6.
+  # Only signing is skipped — electron-builder then applies icon + version
+  # resources natively (its own PE editor, no wine), which fixes the
+  # Windows shortcut icon without any post-build patching.
+  signExecutable: false
+
+portable:
+  artifactName: MEMENTO-${version}.exe
+
+# R3 task #9 (SUPERSEDED): the assisted installer is now the setup-app
+# wizard (setup v2.0.0, exact MEMENTO Setup design + real install logic).
+# The NSIS script stays in build/r3-installer.nsi for reference only.

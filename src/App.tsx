@@ -10,17 +10,31 @@ import ConnectionTab from "./components/ConnectionTab";
 import EditorTab from "./components/EditorTab";
 import PingerTab from "./components/PingerTab";
 import ScannerTab from "./components/ScannerTab";
+import RoutingTab from "./components/RoutingTab";
 import ExportTab from "./components/ExportTab";
+import AetherTab from "./components/AetherTab";
+import UpdateCenterTab from "./components/UpdateCenterTab";
+import GoogleSideTab from "./components/GoogleSideTab";
+import LiveConnTab from "./components/LiveConnTab";
+import SettingsTab from "./components/SettingsTab";
 import DonateTab from "./components/DonateTab";
 import ContactTab from "./components/ContactTab";
 import TitleBar from "./components/TitleBar";
 import ConnectionManager from "./components/ConnectionManager";
 import { useStore } from "./store";
 import { cn } from "./utils/cn";
+import { t } from "./i18n";
+import { connectToConfig, disconnectConnection } from "./utils/connectionActions";
 import { Menu, X, Eye } from "lucide-react";
 
-import { fetchSubscription } from "./utils/subscription";
+import { fetchSubscriptionDetailed } from "./utils/subscription";
+import { installRendererErrorLogging } from "./utils/errorLog";
 import toast from "react-hot-toast";
+
+// 3.1.8 (user request #4): the renderer's global error capture — window
+// errors, unhandled rejections, console.error/warn — ALL flow into the
+// main-side logging pipeline (file + recent tail). One call, idempotent.
+installRendererErrorLogging();
 
 function TabContent() {
   const activeTab = useStore(s => s.activeTab);
@@ -42,7 +56,13 @@ function TabContent() {
           {activeTab === "editor" && <EditorTab />}
           {activeTab === "pinger" && <PingerTab />}
           {activeTab === "scanner" && <ScannerTab />}
+          {activeTab === "routing" && <RoutingTab />}
           {activeTab === "export" && <ExportTab />}
+          {activeTab === "aether" && <AetherTab />}
+          {activeTab === "updatecenter" && <UpdateCenterTab />}
+          {activeTab === "googleside" && <GoogleSideTab />}
+          {activeTab === "liveconn" && <LiveConnTab />}
+          {activeTab === "settings" && <SettingsTab />}
           {activeTab === "donate" && <DonateTab />}
           {activeTab === "contact" && <ContactTab />}
         </div>
@@ -72,6 +92,54 @@ export default function App() {
     document.documentElement.setAttribute("lang", language);
   }, [language]);
 
+  // Phase C5 (kill switch): boot-load the arm-flag mirror from the main
+  // process (appPrefs.killSwitch — the enforcement side lives there).
+  // Reply-is-authority: whatever the main process answers wins (the stale
+  // mirror default of false must never mask a persisted ON state).
+  // Browser preview: the mock answers with killSwitch:false — honest.
+  useEffect(() => {
+    (window as any).electronAPI?.invoke("app_prefs_get")?.then((p: any) => {
+      if (p && typeof p.killSwitch === "boolean") {
+        useStore.getState().setKillSwitchArmed(p.killSwitch, { persist: false });
+      }
+    })?.catch(() => {});
+  }, []);
+
+  // Phase D3 (item 4) + Phase D4: the Ctrl+Alt+C global hotkey AND the tray
+  // menu's Connect/Disconnect item both fire in the MAIN process and arrive
+  // here through the same command-bus pattern (two channels, one shared
+  // handler with identical toggle semantics — the connection engine lives
+  // in the renderer):
+  //   connected/connecting -> disconnect; idle with a last config ->
+  //   reconnect it; idle with nothing -> honest toast. Aether sessions are
+  //   NOT toggled from here (they have their own lifecycle in the Aether
+  //   tab).
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.app) return;
+    const onToggle = () => {
+      const st = useStore.getState();
+      if (st.aetherStatus === "connected") {
+        toast(t("appopt.hotkeyAether", st.language), { icon: "ℹ️" });
+        return;
+      }
+      if (st.connStatus === "connected" || st.connStatus === "connecting") {
+        disconnectConnection({ manual: true }).catch(() => {});
+        return;
+      }
+      if (st.connConfigId) {
+        connectToConfig(st.connConfigId).catch(() => {});
+        return;
+      }
+      toast(t("appopt.hotkeyNoConfig", st.language), { icon: "ℹ️" });
+    };
+    const unsubs = [
+      api.app.onHotkeyToggleConnect?.(onToggle),
+      api.app.onTrayToggleConnect?.(onToggle),
+    ].filter((u): u is () => void => typeof u === "function");
+    return () => unsubs.forEach(u => u());
+  }, []);
+
   // Close mobile sidebar when user picks a tab
   useEffect(() => {
     setMobileSidebarOpen(false);
@@ -92,21 +160,32 @@ export default function App() {
         if (now - lastUpdated >= intervalMs) {
           try {
             console.log(`[MEMENTO] Auto-updating group: ${group.name}`);
-            const lines = await fetchSubscription(group.subscriptionUrl);
+            // Phase D2 (item 1): detailed fetch also captures subscription-userinfo
+            const detailed = await fetchSubscriptionDetailed(group.subscriptionUrl);
+            const lines = detailed.lines;
             
             const before = useStore.getState().configs.length;
             useStore.getState().addConfigs(lines);
-            const addedIds = useStore.getState().configs.slice(-(useStore.getState().configs.length - before)).map(c => c.id);
-            
-            if (addedIds.length > 0) {
+            const st = useStore.getState();
+            // Only treat configs as "newly added" when the count actually
+            // grew — with zero additions, slice(-0) evaluates as slice(0)
+            // (the WHOLE list) and used to dump every config into the group.
+            const addedCount = st.configs.length - before;
+            if (addedCount > 0) {
+              const addedIds = st.configs.slice(-addedCount).map(c => c.id);
               useStore.getState().addConfigsToGroup(group.id, addedIds);
               toast.success(`Auto-updated group "${group.name}": +${addedIds.length} configs`, {
                 icon: "🔄"
               });
             }
             
-            // Mark as updated
-            useStore.getState().updateSubscriptionGroup(group.id, { lastUpdated: now });
+            // Mark as updated (+ Phase D2: usage info when the server reported it)
+            useStore.getState().updateSubscriptionGroup(group.id, {
+              lastUpdated: now,
+              ...(detailed.userInfo
+                ? { userInfo: { ...detailed.userInfo, fetchedAt: Date.now() } }
+                : {}),
+            });
           } catch (e) {
             console.warn(`[MEMENTO] Auto-update failed for group ${group.name}`, e);
           }

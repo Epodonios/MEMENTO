@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../store";
 import { cn } from "../utils/cn";
-import { fetchSubscription, MAX_CONFIGS_PER_SOURCE } from "../utils/subscription";
+import { fetchSubscriptionDetailed, MAX_CONFIGS_PER_SOURCE } from "../utils/subscription";
 import {
   DatabaseZap,
   ArrowLeft,
@@ -16,6 +16,10 @@ import {
   FolderTree,
   Boxes,
   Biohazard,
+  Layers,
+  Globe2,
+  Rocket,
+  Sprout,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import toast from "react-hot-toast";
@@ -199,6 +203,52 @@ const BROKERS: BrokerDef[] = [
       { name: "All configs", url: "https://raw.githubusercontent.com/cbusifabcap/daily_free_vpn/refs/heads/main/Z.txt" },
     ],
   },
+  // ---- Task 13 (A2): +4 verified sources (re-checked live 2026-09-16) ----
+  {
+    id: "barry-far",
+    name: "barry-far",
+    icon: Layers,
+    iconBg: "from-rose-400 via-red-500 to-orange-600",
+    description: "Massive daily-updated collector (~8000 configs), also split by protocol.",
+    items: [
+      { name: "All Configs", url: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt", desc: "Everything in one file (first 2000 imported)" },
+      { name: "Vless", url: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt" },
+      { name: "Vmess", url: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt" },
+      { name: "Shadowsocks", url: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/ss.txt" },
+      { name: "Trojan", url: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/trojan.txt" },
+    ],
+  },
+  {
+    id: "mahdibland",
+    name: "V2RayAggregator",
+    icon: Globe2,
+    iconBg: "from-indigo-400 via-violet-500 to-purple-600",
+    description: "The best-known aggregator (mahdibland) — speed-tested Eternity lists.",
+    items: [
+      { name: "Eternity", url: "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt", desc: "Full mixed list, plain text" },
+      { name: "Eternity Air", url: "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/EternityAir.txt", desc: "Lighter speed-tested subset" },
+    ],
+  },
+  {
+    id: "matinghanbari",
+    name: "v2ray-configs",
+    icon: Rocket,
+    iconBg: "from-lime-400 via-green-500 to-emerald-600",
+    description: "MatinGhanbari's live collector, refreshed every 15 minutes.",
+    items: [
+      { name: "All (v2ray)", url: "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/all_sub.txt", desc: "All protocols, updated /15min" },
+    ],
+  },
+  {
+    id: "peasoft",
+    name: "NoMoreWalls",
+    icon: Sprout,
+    iconBg: "from-teal-400 via-cyan-500 to-sky-600",
+    description: "peasoft's auto-tested list (China-oriented, plain text).",
+    items: [
+      { name: "list_raw", url: "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list_raw.txt", desc: "Plain-text edition" },
+    ],
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -217,6 +267,7 @@ export default function BrokersModal({ onClose }: { onClose: () => void }) {
     addSubscriptionGroup,
     addConfigsToGroup,
     subscriptionGroups,
+    updateSubscriptionGroup, // Phase D2 (item 1): capture usage info per broker group
   } = useStore();
 
   const isRtl = language === "fa" || language === "ar";
@@ -234,7 +285,10 @@ export default function BrokersModal({ onClose }: { onClose: () => void }) {
     const groupName = `Broker • ${brokerName} • ${item.name}`;
     setLoadingKey(item.name);
     try {
-      const lines = await fetchSubscription(item.url);
+      // Phase D2 (item 1): detailed fetch also captures subscription-userinfo
+      // (rare on broker sources, but free to keep when present)
+      const detailed = await fetchSubscriptionDetailed(item.url);
+      const lines = detailed.lines;
       if (lines.length === 0) {
         toast("No configs found in this broker source", { icon: "⚠️" });
         setLoadingKey(null);
@@ -264,6 +318,13 @@ export default function BrokersModal({ onClose }: { onClose: () => void }) {
       if (added > 0) {
         const addedIds = useStore.getState().configs.slice(-added).map(c => c.id);
         addConfigsToGroup(groupId, addedIds);
+      }
+
+      // Phase D2 (item 1): usage info rides along when the source reports it
+      if (detailed.userInfo) {
+        updateSubscriptionGroup(groupId, {
+          userInfo: { ...detailed.userInfo, fetchedAt: Date.now() },
+        });
       }
 
       setLastGroupName(groupName);

@@ -1,0 +1,22 @@
+{
+  "_header": "MEMENTO Phase C6 (Option B) — the Aether pin-per-version table. This file is the ONLY authority the Aether update service accepts: a version that is not listed here can never be downloaded or installed, and every listed artifact must match the sha256 recorded below BEFORE it can replace the bundled binary. New entries are added by hand only after the official release assets have been re-verified from the CluvexStudio page (per the permanent provenance rule in resources/aether/README.md). The 1.9.0 entries are pinned-by-test (taskC6-quickcheck) to be byte-identical to AETHER_SHA256_PINS inside electron/aether.ts.",
+  "releasesPage": "https://github.com/CluvexStudio/Aether/releases",
+  "checkUrl": "https://api.github.com/repos/CluvexStudio/Aether/releases/latest",
+  "versions": [
+    {
+      "version": "1.9.0",
+      "verified": "2026-09-16",
+      "notes": "Bundled pin (Task 12). Windows asset hash matches the official per-asset .sha256 and SHA256SUMS.txt; the extracted-binary hash is bit-identical to Aethon's AETHER_SHA256 pin. No linux download URL is listed because Task 12 verified the linux binary hash directly, not a release asset — an apply for linux therefore refuses with an honest no-url reason.",
+      "sha256": {
+        "win32": "ee400806bf73fe16e655e6478eb7442c2c4e0576c4c8ce1913ac474e846b36cd",
+        "linux": "e8b2a83c4ab0ad1a75dac21f2f2b9d701998f86866fde15025ffba307b7130b9"
+      },
+      "zipSha256": {
+        "win32": "5c64be2f2967469c53abdbec82599cb3c2ef005b8ef8efed79ba235d4ed3eb8d"
+      },
+      "url": {
+        "win32": "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-windows-x86_64.zip"
+      }
+    }
+  ]
+}

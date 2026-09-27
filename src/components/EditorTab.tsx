@@ -1,23 +1,64 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { cn } from "../utils/cn";
 import { editLink, expandIpRange, detectProtocol } from "../utils/editor";
-import { useStore } from "../store";
+import { useStore, isSingBoxProtocol } from "../store";
 import { t } from "../i18n";
 import {
   Network, Wand2, Copy, Download, Upload, Trash2, ArrowRight,
-  Globe, Hash, Sparkles, Info, RotateCcw, PlusCircle
+  Globe, Hash, Sparkles, Info, RotateCcw, PlusCircle, TriangleAlert
 } from "lucide-react";
 import toast from "react-hot-toast";
 import SectionHeader from "./SectionHeader";
 
 type Mode = "iprange" | "spoof";
 
+/**
+ * Task 11 (user-approved B3): the Editor's rewrites are link-based and
+ * would silently DAMAGE hysteria2/tuic links (their params differ from
+ * vmess/vless/trojan/ss). Those links are counted and skipped untouched —
+ * in this phase they are imported and edited via their links only.
+ */
+function isSingBoxLink(link: string): boolean {
+  const p = detectProtocol(link);
+  return p !== "unknown" && isSingBoxProtocol(p);
+}
+
+/** Amber guard banner shown when the input contains sing-box links. */
+function SingBoxBanner({ count }: { count: number }) {
+  const language = useStore(s => s.language);
+  return (
+    <div className={cn(
+      "flex items-start gap-3.5 p-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 shadow-inner scale-in"
+    )}>
+      <TriangleAlert className="w-5 h-5 mt-0.5 shrink-0 text-amber-400" />
+      <p className="text-xs dark:text-ink-200 light:text-ink-800 leading-relaxed font-medium">
+        {t("editor.singboxBanner", language as any).replace("{n}", String(count))}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * F10 (approved): debounce a rapidly-changing value. expandIpRange() over a
+ * large CIDR (a /12 can yield 100k+ IPs) used to re-run synchronously on
+ * EVERY keystroke in the IP-range textarea via useMemo, freezing the input.
+ * The heavy derivation now recomputes only after typing pauses for 300 ms.
+ */
+function useDebouncedValue<T>(value: T, delayMs = 300): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export default function EditorTab() {
   const [mode, setMode] = useState<Mode>("iprange");
 
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6 fade-in">
-      <SectionHeader titleKey="tab.editor" descKey="desc.editor" icon={Wand2} />
+      <SectionHeader titleKey="tab.editor" descKey="desc.editor" hintKey="hint.editor" icon={Wand2} />
 
       {/* Mode Switcher */}
       <div className="inline-flex p-1 rounded-2xl gap-1 dark:bg-surface-800/80 light:bg-surface-200/80 border dark:border-surface-700/50 light:border-surface-300/50 shadow-inner">
@@ -238,10 +279,12 @@ function IpRangeMode() {
   const [output, setOutput] = useState("");
   const [maxOutput, setMaxOutput] = useState(2000);
 
+  const debouncedIpRange = useDebouncedValue(ipRangeInput, 300);
+
   const ipList = useMemo(() => {
-    if (!ipRangeInput.trim()) return [];
-    return expandIpRange(ipRangeInput, 100000);
-  }, [ipRangeInput]);
+    if (!debouncedIpRange.trim()) return [];
+    return expandIpRange(debouncedIpRange, 100000);
+  }, [debouncedIpRange]);
 
   const handleGenerate = useCallback(() => {
     const links = configsInput.split("\n").map(l => l.trim()).filter(Boolean);
@@ -254,9 +297,17 @@ function IpRangeMode() {
       return;
     }
 
+    // Task 11 B3: sing-box links are skipped untouched.
+    const sbCount = links.filter(isSingBoxLink).length;
+    if (sbCount === links.length) {
+      toast.error("All pasted configs run on the sing-box core (Hysteria2/TUIC) and cannot be bulk-edited here in this phase.");
+      return;
+    }
+
     const results: string[] = [];
     outer: for (const link of links) {
       if (detectProtocol(link) === "unknown") continue;
+      if (isSingBoxLink(link)) continue;
       for (let i = 0; i < ipList.length; i++) {
         if (results.length >= maxOutput) break outer;
         const ip = ipList[i];
@@ -275,14 +326,24 @@ function IpRangeMode() {
     }
 
     setOutput(results.join("\n"));
-    toast.success(`Generated ${results.length} configs`);
+    if (sbCount > 0) {
+      toast(`Generated ${results.length} configs — ${sbCount} sing-box (Hysteria2/TUIC) link${sbCount > 1 ? "s" : ""} skipped.`, { icon: "⚠️", duration: 6000 });
+    } else {
+      toast.success(`Generated ${results.length} configs`);
+    }
   }, [configsInput, ipList, portInput, maxOutput]);
 
   const totalPossible = configsInput.split("\n").filter(l => l.trim()).length * ipList.length;
+  const singBoxCount = useMemo(
+    () => configsInput.split("\n").map(l => l.trim()).filter(Boolean).filter(isSingBoxLink).length,
+    [configsInput]
+  );
 
   return (
     <div className="space-y-6 fade-in">
       <InfoBanner text="Each config will be cloned for every IP in the range, replacing the original server IP/host. Great for screening CDN IPs." />
+
+      {singBoxCount > 0 && <SingBoxBanner count={singBoxCount} />}
 
       <ConfigInput value={configsInput} onChange={setConfigsInput} />
 
@@ -403,9 +464,17 @@ function SpoofMode() {
       return;
     }
 
+    // Task 11 B3: sing-box links are skipped untouched.
+    const sbCount = links.filter(isSingBoxLink).length;
+    if (sbCount === links.length) {
+      toast.error("All pasted configs run on the sing-box core (Hysteria2/TUIC) and cannot be bulk-edited here in this phase.");
+      return;
+    }
+
     const results: string[] = [];
     for (const link of links) {
       if (detectProtocol(link) === "unknown") continue;
+      if (isSingBoxLink(link)) continue;
       const edited = editLink(link, {
         newAddress: newIp.trim() || undefined,
         newPort: newPort.trim() || undefined,
@@ -419,8 +488,17 @@ function SpoofMode() {
     }
 
     setOutput(results.join("\n"));
-    toast.success(`Spoofed ${results.length} configs`);
+    if (sbCount > 0) {
+      toast(`Spoofed ${results.length} configs — ${sbCount} sing-box (Hysteria2/TUIC) link${sbCount > 1 ? "s" : ""} skipped.`, { icon: "⚠️", duration: 6000 });
+    } else {
+      toast.success(`Spoofed ${results.length} configs`);
+    }
   }, [configsInput, newIp, newPort]);
+
+  const singBoxCount = useMemo(
+    () => configsInput.split("\n").map(l => l.trim()).filter(Boolean).filter(isSingBoxLink).length,
+    [configsInput]
+  );
 
   const reset = () => {
     setNewIp("");
@@ -431,6 +509,8 @@ function SpoofMode() {
   return (
     <div className="space-y-6 fade-in">
       <InfoBanner text="Replace the IP/host and/or port of all your configs with custom values you provide. All extra settings (UUID, TLS, path, headers) remain exactly as they were." />
+
+      {singBoxCount > 0 && <SingBoxBanner count={singBoxCount} />}
 
       <ConfigInput value={configsInput} onChange={setConfigsInput} />
 

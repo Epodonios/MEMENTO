@@ -1,5 +1,6 @@
 import { Component, ReactNode } from "react";
 import { AlertTriangle, RotateCcw } from "lucide-react";
+import { logEvent } from "../utils/errorLog";
 
 interface Props {
   children: ReactNode;
@@ -23,7 +24,10 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // Log to console for devs, but never expose to user
+    // 3.1.8 (user request #4): the FULL boundary catch lands in the log
+    // pipeline (main-side file + ring) — with the component stack, so a
+    // render crash on a user machine is actually diagnosable.
+    logEvent("error", "error-boundary", `React boundary catch: ${error.message}`, [error.stack, info?.componentStack].filter(Boolean).join("\n---\n") || null);
     console.error("MEMENTO ErrorBoundary caught:", error, info);
   }
 

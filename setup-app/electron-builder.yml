@@ -1,0 +1,74 @@
+# MementoSetup — electron-builder configuration.
+#
+# Ships as a single portable exe (MementoSetup-<version>.exe): the wizard
+# AND the full MEMENTO payload in one file.
+#
+# 2.0.3 ELEVATION CONTRACT: the stub now requests requireAdministrator —
+# the setup runs elevated after an explicit UAC consent (user request,
+# 3.1.7 AV round). Note the trade-offs we ACCEPT knowingly:
+#   - elevation alone does NOT whitelist anything; Defender heuristics
+#     score behavior + content, not tokens. It is the user's explicit ask.
+#   - the per-user install destination (%LOCALAPPDATA%\Programs\MEMENTO),
+#     the HKCU uninstall key and the preserved userData contract stay
+#     UNCHANGED (see main.ts defaultDestDir) — MEMENTO itself still runs
+#     unelevated; the setup:launch path spawns it token-dropped through
+#     explorer.exe.
+#   - every launch of the setup shows one UAC prompt.
+#
+# 3.1.6 SIZE FIX: the payload is the runtime-reuse LITE tree (~110 MB:
+# app.asar + cores) — the install clones the wizard's own Electron runtime
+# instead of shipping a second copy, and 2.0.3 does that via an NTFS
+# HARDLINK (no self-image byte copy — see installerCore.ts).
+appId: com.epodonios.memento.setup
+productName: MementoSetup
+copyright: MEMENTO Setup by Epodonios
+
+directories:
+  output: release
+  buildResources: build
+
+compression: maximum
+
+files:
+  - dist/**
+  - dist-electron/**
+  - payload-meta.json
+  - payload-manifest.json
+  - package.json
+
+asar: true
+
+# The payload (lite tree) must sit on disk OUTSIDE the asar so installerCore
+# can copy it byte-for-byte.
+extraResources:
+  - from: payload
+    to: payload
+    filter:
+      - "**/*"
+  - from: build/icon.ico
+    to: icon.ico
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  # Chromium locale .paks the app never shows (all UI text ships inside the
+  # renderer) — trimming them saves ~48 MB raw per runtime copy.
+  electronLanguages:
+    - en-US
+  # Same no-cert contract as MEMENTO itself: no signing on this project.
+  # (Exe resource editing — icon/version — is done post-build by
+  # scripts/embed-icon.mjs, pure-JS resedit, no wine.)
+  # Only signing is skipped — electron-builder then applies icon + version
+  # resources natively (its own PE editor, no wine), which fixes the
+  # Windows shortcut icon without any post-build patching.
+  signExecutable: false
+
+portable:
+  artifactName: MementoSetup-${version}.exe
+  # 2.0.3 — RequestExecutionLevel admin baked into the NSIS portable stub
+  # (PortableOptions.requestExecutionLevel — "admin" IS requireAdministrator:
+  # double-click → UAC → the whole wizard runs elevated).
+  requestExecutionLevel: admin

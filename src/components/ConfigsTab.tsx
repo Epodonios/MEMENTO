@@ -1,16 +1,21 @@
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
-import { useStore, ParsedConfig, ProtocolType } from "../store";
+import { useMemo, useState, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useStore, ParsedConfig, ProtocolType, configCore } from "../store";
 import { cn } from "../utils/cn";
 import { t } from "../i18n";
 import { extractIpFromConfig } from "../utils/ping";
 import { pingManyFast } from "../utils/fastPing";
+import { runUrlTest, runUrlTestBatch } from "../utils/urlTest";
+import { getLatencyHistory, subscribeLatencyHistory, type LatencySample } from "../utils/latencyHistory";
+import { isDesktop } from "../utils/tauriBridge";
 import { playNotificationSound, showBrowserNotification } from "../utils/notification";
-import { fetchSubscription } from "../utils/subscription";
+import { fetchSubscriptionDetailed } from "../utils/subscription";
 import { connectToConfig } from "../utils/connectionActions";
+import QrModal from "./QrModal";
 import {
   Search, Filter, Trash2, Copy, CheckSquare, Square, ChevronDown,
-  Server, Shield, Key, Globe, Fingerprint, Wifi, Route,
-  AlertTriangle, CheckCircle2, ArrowUpDown, Table, Zap, RefreshCw, FolderOpen, Plug
+  Server, Shield, Key, Globe, Fingerprint, Wifi, Route, Cpu,
+  AlertTriangle, CheckCircle2, ArrowUpDown, Table, Zap, RefreshCw, FolderOpen, Plug, Gauge,
+  Activity, BarChart3, QrCode
 } from "lucide-react";
 import toast from "react-hot-toast";
 import SectionHeader from "./SectionHeader";
@@ -23,8 +28,12 @@ const protocolColors: Record<ProtocolType, string> = {
   trojan: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
   ss: "bg-orange-500/10 text-orange-400 border-orange-500/30",
   ssr: "bg-amber-500/10 text-amber-400 border-amber-500/30",
+  socks: "bg-slate-500/10 text-slate-400 border-slate-500/30",
   hysteria2: "bg-pink-500/10 text-pink-400 border-pink-500/30",
   tuic: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
+  // Task E2: amber-family chip — the honest "proprietary scheme" accent
+  // matching the Import tab's non-standard disclosure color.
+  shadowtls: "bg-yellow-500/10 text-yellow-400 border-yellow-500/30",
 };
 
 type SortField = "name" | "protocol" | "address" | "port" | "isValid" | "ping";
@@ -42,12 +51,17 @@ export default function ConfigsTab() {
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [pinging, setPinging] = useState(false);
+  // Phase C2: real-delay URL-test batch (progress + click-again-to-cancel)
+  const [urlTesting, setUrlTesting] = useState(false);
+  const [urlTestProgress, setUrlTestProgress] = useState({ done: 0, total: 0 });
+  const urlTestAbortRef = useRef<AbortController | null>(null);
 
   // Subscription Groups
   const [showManageGroups, setShowManageGroups] = useState(false);
   const [showBrokers, setShowBrokers] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null); // null = All Configs
   const [refreshingGroup, setRefreshingGroup] = useState<string | null>(null);
+  const [qrModal, setQrModal] = useState<{ link: string; name: string } | null>(null); // Phase D3 (item 5)
   const selectionAnchorRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
   const dragModeRef = useRef<"select" | "deselect">("select");
@@ -55,6 +69,9 @@ export default function ConfigsTab() {
 
   const getFilteredConfigs = useStore(s => s.getFilteredConfigs);
   const baseFilteredConfigs = getFilteredConfigs();
+
+  // Phase D2 (item 1): the group whose usage bar is shown (null = All Configs)
+  const activeGroup = activeGroupId ? subscriptionGroups.find(g => g.id === activeGroupId) : null;
 
   // If a group is active, filter to only that group's configs
   const filteredConfigs = useMemo(() => {
@@ -72,7 +89,10 @@ export default function ConfigsTab() {
 
     setRefreshingGroup(groupId);
     try {
-      const lines = await fetchSubscription(group.subscriptionUrl);
+      // Phase D2 (item 1): detailed fetch also captures the standard
+      // subscription-userinfo (HTTP header or "#subscription-userinfo:" line).
+      const detailed = await fetchSubscriptionDetailed(group.subscriptionUrl);
+      const lines = detailed.lines;
       if (lines.length === 0) {
         toast("URL returned no configs", { icon: "⚠️" });
         return;
@@ -82,14 +102,21 @@ export default function ConfigsTab() {
       const after = useStore.getState().configs.length;
       const added = after - before;
 
+      // Only overwrite the stored usage when the server actually reported it
+      // this time — a proxy attempt that hid the header must not erase the
+      // last known value (fetchedAt keeps staleness visible).
+      const userInfoPatch = detailed.userInfo
+        ? { userInfo: { ...detailed.userInfo, fetchedAt: Date.now() } }
+        : {};
+
       if (added > 0) {
         const newIds = useStore.getState().configs.slice(-added).map(c => c.id);
         useStore.getState().addConfigsToGroup(groupId, newIds);
-        useStore.getState().updateSubscriptionGroup(groupId, { lastUpdated: Date.now() });
+        useStore.getState().updateSubscriptionGroup(groupId, { lastUpdated: Date.now(), ...userInfoPatch });
         toast.success(`Refreshed "${group.name}": +${added} new configs`);
       } else {
         toast(`"${group.name}" is already up to date`, { icon: "✓" });
-        useStore.getState().updateSubscriptionGroup(groupId, { lastUpdated: Date.now() });
+        useStore.getState().updateSubscriptionGroup(groupId, { lastUpdated: Date.now(), ...userInfoPatch });
       }
     } catch (err: any) {
       toast.error(`Refresh failed: ${err.message || "Unknown error"}`);
@@ -188,6 +215,97 @@ export default function ConfigsTab() {
     showBrowserNotification("MEMENTO Ping", `${successCount} online, ${failCount} failed`);
 
   }, [configs, pinging, notificationMode, language, setPingResult, subscriptionGroups]);
+
+  /**
+   * Phase C2 (item 3) — real-delay URL-test over the CURRENT view: every
+   * valid config gets one HTTP GET through its own TEMPORARY core instance
+   * (worker pool, concurrency 4), generated by the SAME generators +
+   * builder options as connect (the C1 fragment dialer is measured when
+   * enabled). Results live in the standalone latencyHistory slice — NOT in
+   * pingResults, whose semantics are a plain TCP handshake (Connect Best
+   * keeps sorting on TCP ping; the URL badges show end-to-end HTTP).
+   * Clicking while running cancels SCHEDULING (in-flight probes finish or
+   * time out on their own).
+   */
+  const handleUrlTestAll = useCallback(async () => {
+    if (urlTesting) {
+      urlTestAbortRef.current?.abort();
+      return;
+    }
+    const targets = filteredConfigs.filter(c => c.isValid);
+    if (targets.length === 0) return;
+    if (!isDesktop()) {
+      toast.error("Desktop only — the real-delay test needs the desktop app");
+      return;
+    }
+    setUrlTesting(true);
+    setUrlTestProgress({ done: 0, total: targets.length });
+    const ac = new AbortController();
+    urlTestAbortRef.current = ac;
+    try {
+      const results = await runUrlTestBatch(targets, {
+        signal: ac.signal,
+        onProgress: (done, total) => setUrlTestProgress({ done, total }),
+      });
+      const ok = results.filter(r => r.ms !== null).length;
+      const fail = results.length - ok;
+      if (notificationMode === "sound" || notificationMode === "both") {
+        playNotificationSound();
+      }
+      if (notificationMode === "toast" || notificationMode === "both") {
+        toast.success(
+          `${t("pinger.completed", language)} — ${ok} OK, ${fail} failed`,
+          { duration: 4000 },
+        );
+      }
+      showBrowserNotification("MEMENTO URL-test", `${ok} reachable, ${fail} failed`);
+    } finally {
+      setUrlTesting(false);
+      urlTestAbortRef.current = null;
+    }
+  }, [urlTesting, filteredConfigs, notificationMode, language]);
+
+  /**
+   * Phase D1 — "Connect Best": connect to the lowest-latency config in the
+   * CURRENT view (respects the active Subscription Group tab, protocol filter
+   * and search box), using the existing fast-ping data. Deliberately does NOT
+   * trigger a ping sweep by itself — pinging 2000 imported configs takes tens
+   * of seconds, so a silent long-running action would look broken; the button
+   * asks for a ping run first when no latency data exists yet.
+   */
+  const handleConnectBest = useCallback(async () => {
+    const best = filteredConfigs.reduce<{ id: string; ping: number } | null>((acc, c) => {
+      if (!c.isValid) return acc;
+      const p = pingResults[c.id];
+      if (!p || p.ping === null || p.error) return acc;
+      if (acc === null || p.ping < acc.ping) return { id: c.id, ping: p.ping };
+      return acc;
+    }, null);
+
+    if (!best) {
+      toast(t("configs.connectBestNone", language), { icon: "⚡", duration: 5000 });
+      return;
+    }
+
+    const st = useStore.getState();
+    if (st.connConfigId === best.id && st.connStatus === "connected") {
+      toast.success(
+        t("configs.connectBestAlready", language).replace("{ms}", String(best.ping)),
+        { duration: 5000 },
+      );
+      return;
+    }
+
+    const bestConfig = st.configs.find(c => c.id === best.id);
+    st.setActiveTab("connection");
+    toast(
+      t("configs.connectBestConnecting", language)
+        .replace("{ms}", String(best.ping))
+        .replace("{name}", bestConfig?.name || bestConfig?.address || ""),
+      { icon: "⚡", duration: 4000 },
+    );
+    await connectToConfig(best.id);
+  }, [filteredConfigs, pingResults, language]);
 
   const applySelection = useCallback((index: number, mode: "select" | "deselect", asRange = false) => {
     if (index < 0 || index >= sortedConfigs.length) return;
@@ -330,7 +448,7 @@ export default function ConfigsTab() {
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6 fade-in">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-        <SectionHeader titleKey="tab.configs" descKey="desc.configs" icon={Table} />
+        <SectionHeader titleKey="tab.configs" descKey="desc.configs" hintKey="hint.configs" icon={Table} />
         <div className="flex items-center gap-2 flex-wrap">
           {/* Subscription Groups Button */}
           <button
@@ -371,6 +489,43 @@ export default function ConfigsTab() {
           >
             <Zap className={cn("w-3.5 h-3.5", pinging && "animate-spin")} />
             {pinging ? "Pinging…" : "⚡ Ping"}
+          </button>
+
+          {/* Phase C2: real-delay URL-test — one HTTP GET through a temporary
+              core instance per config (v2rayN "real delay" semantics);
+              click again while running to cancel scheduling. */}
+          <button
+            onClick={handleUrlTestAll}
+            disabled={configs.length === 0}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:scale-105 active:scale-95 cursor-pointer",
+              urlTesting
+                ? "bg-teal-500/20 text-teal-300 animate-pulse cursor-wait"
+                : "bg-gradient-to-r from-teal-400 to-emerald-500 text-black/90 shadow-md shadow-teal-500/25 hover:brightness-110",
+              configs.length === 0 && "opacity-40 cursor-not-allowed",
+            )}
+            title={urlTesting ? "Click to cancel scheduling" : t("configs.urlTest", language)}
+          >
+            <Activity className={cn("w-3.5 h-3.5", urlTesting && "animate-spin")} />
+            {urlTesting
+              ? `${t("configs.urlTesting", language)} ${urlTestProgress.done}/${urlTestProgress.total}`
+              : t("configs.urlTestAll", language)}
+          </button>
+
+          {/* Phase D1: Connect Best — lowest-latency config of the current view */}
+          <button
+            onClick={handleConnectBest}
+            disabled={configs.length === 0}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:scale-105 active:scale-95 cursor-pointer",
+              "bg-gradient-to-r from-cyan-400 to-sky-600 text-white shadow-md shadow-cyan-500/25 hover:brightness-110",
+              configs.length === 0 && "opacity-40 cursor-not-allowed",
+            )}
+            title={t("configs.connectBest", language)}
+          >
+            <Gauge className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{t("configs.connectBest", language)}</span>
+            <span className="sm:hidden">Best</span>
           </button>
 
           {selectedIds.size > 0 && (
@@ -513,6 +668,13 @@ export default function ConfigsTab() {
         </div>
       )}
 
+      {/* Phase D2 (item 1): server-reported subscription usage for the ACTIVE group */}
+      {activeGroup?.userInfo && <SubscriptionUsageBar group={activeGroup} language={language} />}
+
+      {/* Phase D4: the builder toggles (item 9) and the app options (items
+          2/4/7) both moved to the dedicated Settings tab — their locked
+          final home since the D2/D3 interim placement here. */}
+
       {/* Table */}
       <div className={cn(
         "rounded-2xl border overflow-hidden",
@@ -589,6 +751,7 @@ export default function ConfigsTab() {
                     isSelected={selectedIds.has(config.id)}
                     onToggle={() => toggleSelect(config.id)}
                     onExpand={() => setExpandedId(expandedId === config.id ? null : config.id)}
+                    onQr={(c) => setQrModal({ link: c.raw, name: c.name || `${c.address}:${c.port}` })}
                     onPointerDown={(e) => handleRowPointerDown(idx, e)}
                     onPointerEnter={(e) => handleRowPointerEnter(idx, e)}
                     pingResult={pingResults[config.id] || null}
@@ -610,12 +773,17 @@ export default function ConfigsTab() {
         <BrokersModal onClose={() => setShowBrokers(false)} />
       )}
 
+      {/* QR Modal (Phase D3, item 5) */}
+      {qrModal && (
+        <QrModal link={qrModal.link} name={qrModal.name} onClose={() => setQrModal(null)} />
+      )}
+
     </div>
   );
 }
 
 function ConfigRow({
-  config, index, isExpanded, isSelected, onToggle, onExpand,
+  config, index, isExpanded, isSelected, onToggle, onExpand, onQr,
   onPointerDown, onPointerEnter, pingResult
 }: {
   config: ParsedConfig;
@@ -624,6 +792,7 @@ function ConfigRow({
   isSelected: boolean;
   onToggle: () => void;
   onExpand: () => void;
+  onQr: (c: ParsedConfig) => void;
   onPointerDown: (e: React.PointerEvent) => void;
   onPointerEnter: (e: React.PointerEvent) => void;
   pingResult: { ping: number | null; error?: string; timestamp: number } | null;
@@ -639,6 +808,24 @@ function ConfigRow({
   // feedback, without relying on CSS transforms on <tr> (unreliably
   // supported across browsers/table layout engines).
   const [flash, setFlash] = useState(false);
+
+  // Phase C2: per-row real-delay probe (spinner local to THIS row; the
+  // result itself lands in the latencyHistory slice, not in props).
+  const [urlTestingRow, setUrlTestingRow] = useState(false);
+  const handleUrlTestRow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (urlTestingRow) return;
+    if (!config.isValid) {
+      toast.error("This config is invalid and cannot be tested");
+      return;
+    }
+    setUrlTestingRow(true);
+    try {
+      await runUrlTest(config);
+    } finally {
+      setUrlTestingRow(false);
+    }
+  };
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -717,6 +904,16 @@ function ConfigRow({
             )}>
               {config.name || "Unnamed"}
             </span>
+            {isThisConnected && configCore(config) === "sing-box" && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 bg-pink-500/10 text-pink-300 border border-pink-500/30">
+                sing-box
+              </span>
+            )}
+            {isThisConnected && configCore(config) === "xray" && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 bg-surface-500/10 text-ink-300 border border-surface-500/30">
+                Xray
+              </span>
+            )}
           </div>
         </td>
         <td className="px-4 py-3">
@@ -734,28 +931,33 @@ function ConfigRow({
           {config.port || "—"}
         </td>
         <td className="px-4 py-3 text-center">
-          {pingResult ? (
-            pingResult.ping !== null && !pingResult.error ? (
-              <span className={cn(
-                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold font-mono",
-                pingResult.ping < 100
-                  ? "bg-emerald-500/15 text-emerald-400"
-                  : pingResult.ping < 300
-                    ? "bg-yellow-500/15 text-yellow-400"
-                    : "bg-red-500/15 text-red-400"
-              )}>
-                <Zap className="w-2.5 h-2.5" />
-                {pingResult.ping}ms
-              </span>
+          <div className="flex flex-col items-center gap-1">
+            {pingResult ? (
+              pingResult.ping !== null && !pingResult.error ? (
+                <span className={cn(
+                  "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold font-mono",
+                  pingResult.ping < 100
+                    ? "bg-emerald-500/15 text-emerald-400"
+                    : pingResult.ping < 300
+                      ? "bg-yellow-500/15 text-yellow-400"
+                      : "bg-red-500/15 text-red-400"
+                )}>
+                  <Zap className="w-2.5 h-2.5" />
+                  {pingResult.ping}ms
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400">
+                  <AlertTriangle className="w-2.5 h-2.5" />
+                  —
+                </span>
+              )
             ) : (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400">
-                <AlertTriangle className="w-2.5 h-2.5" />
-                —
-              </span>
-            )
-          ) : (
-            <span className="text-xs dark:text-surface-600 light:text-surface-400">—</span>
-          )}
+              <span className="text-xs dark:text-surface-600 light:text-surface-400">—</span>
+            )}
+            {/* Phase C2: real-delay URL-test badge — renders ONLY once this
+                config has actually been tested (never-tested rows stay clean) */}
+            <UrlTestBadge configId={config.id} language={language} />
+          </div>
         </td>
         <td className="hidden md:table-cell px-4 py-3 text-center">
           <span className={cn(
@@ -773,6 +975,22 @@ function ConfigRow({
         </td>
         <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-center gap-1">
+            {/* Phase C2: per-row real-delay test — one probe, result lands in
+                the latencyHistory slice and shows in the ping column. */}
+            <button
+              onClick={handleUrlTestRow}
+              disabled={!config.isValid || urlTestingRow}
+              className={cn(
+                "p-1.5 rounded-lg transition-all duration-200 hover:scale-110 active:scale-90",
+                urlTestingRow
+                  ? "text-teal-400 animate-pulse cursor-wait"
+                  : "dark:hover:bg-teal-500/20 light:hover:bg-teal-100 dark:text-surface-400 light:text-surface-500 hover:text-teal-500",
+                !config.isValid && "opacity-30 cursor-not-allowed hover:scale-100"
+              )}
+              title={t("configs.urlTest", language)}
+            >
+              <Activity className={cn("w-3.5 h-3.5", urlTestingRow && "animate-spin")} />
+            </button>
             {/* Quick Connect — jump straight to a live VPN connection with
                 this exact config, without needing to go pick it manually
                 from the dropdown on the Connection tab. */}
@@ -796,6 +1014,13 @@ function ConfigRow({
               title="Copy link"
             >
               <Copy className="w-3.5 h-3.5 dark:text-surface-400 light:text-surface-500" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onQr(config); }}
+              className="p-1.5 rounded-lg transition-all duration-200 hover:scale-110 active:scale-90 dark:hover:bg-surface-600 light:hover:bg-surface-200"
+              title={t("configs.qr", language)}
+            >
+              <QrCode className="w-3.5 h-3.5 dark:text-surface-400 light:text-surface-500" />
             </button>
             <button
               onClick={onExpand}
@@ -829,6 +1054,7 @@ function ConfigDetail({ config }: { config: ParsedConfig }) {
   const fields: { label: string; value: string | undefined; icon: React.ElementType }[] = [
     { label: "UUID", value: config.uuid, icon: Key },
     { label: "Password", value: config.password, icon: Key },
+    { label: "Core", value: configCore(config) === "sing-box" ? "sing-box" : undefined, icon: Cpu },
     { label: "Security", value: config.security, icon: Shield },
     { label: "Encryption", value: config.encryption, icon: Shield },
     { label: "Network", value: config.network, icon: Wifi },
@@ -901,5 +1127,140 @@ function ConfigDetail({ config }: { config: ParsedConfig }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ==================================================================== */
+/*   Phase D2 (item 1): subscription usage bar + (item 9) builder panel  */
+/* ==================================================================== */
+
+/** Human-readable bytes: B -> KB -> MB -> GB -> TB (1 decimal except B). */
+function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${Math.round(n)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+/** Server-reported usage for the ACTIVE subscription group. Rendered ONLY
+ *  when the group actually has userInfo — the "server did not report" case
+ *  is deliberately silent here (no noise on groups that never supported it);
+ *  the ManageGroups modal documents that case in text. */
+function SubscriptionUsageBar({ group, language }: {
+  group: import("../store").SubscriptionGroup;
+  language: import("../i18n").Language;
+}) {
+  const ui = group.userInfo!;
+  const used = (ui.upload || 0) + (ui.download || 0);
+  const total = ui.total || 0;
+  const pct = total > 0 ? Math.min(100, (used / total) * 100) : null;
+  const barColor = pct === null ? "bg-emerald-400"
+    : pct < 75 ? "bg-emerald-400" : pct < 90 ? "bg-amber-400" : "bg-red-400";
+  const expireStr = ui.expire && ui.expire > 0
+    ? t("subs.usageExpire", language).replace("{date}", new Date(ui.expire * 1000).toLocaleDateString())
+    : t("subs.usageNoExpire", language);
+  const fetchedStr = ui.fetchedAt ? new Date(ui.fetchedAt).toLocaleString() : "";
+
+  return (
+    <div className={cn(
+      "p-3 rounded-xl border space-y-2",
+      "dark:border-surface-700/50 dark:bg-surface-800/30",
+      "light:border-surface-200 light:bg-white"
+    )}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs font-bold flex items-center gap-1.5 dark:text-surface-300 light:text-surface-700">
+          <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+          {t("subs.usage", language)} — {group.name}
+        </p>
+        <p className="text-[11px] dark:text-surface-500 light:text-surface-400">
+          {expireStr}{fetchedStr ? ` • ${fetchedStr}` : ""}
+        </p>
+      </div>
+      <div className="flex items-center gap-3">
+        <div className="flex-1 h-2 rounded-full bg-surface-700/50 overflow-hidden">
+          {pct !== null && (
+            <div className={cn("h-full rounded-full transition-all", barColor)} style={{ width: `${pct}%` }} />
+          )}
+        </div>
+        <span className="text-[11px] font-mono shrink-0 dark:text-surface-400 light:text-surface-500">
+          {pct !== null ? `${pct.toFixed(1)}%` : t("subs.usageNoTotal", language)}
+        </span>
+      </div>
+      <p className="text-[11px] font-mono dark:text-surface-500 light:text-surface-400">
+        ↑ {fmtBytes(ui.upload || 0)} · ↓ {fmtBytes(ui.download || 0)} · {t("subs.usageUsed", language)
+          .replace("{used}", fmtBytes(used)).replace("{total}", total > 0 ? fmtBytes(total) : "—")}
+      </p>
+    </div>
+  );
+}
+
+
+/** Phase C2: the real-delay URL-test result for ONE config — driven ONLY by
+ *  the standalone latencyHistory slice via useSyncExternalStore, so a new
+ *  sample re-renders THIS row alone (the App.tsx:61-64 whole-store perf
+ *  rule stays intact). Renders nothing for never-tested configs. */
+function UrlTestBadge({ configId, language }: {
+  configId: string;
+  language: import("../i18n").Language;
+}) {
+  const samples = useSyncExternalStore(subscribeLatencyHistory, () => getLatencyHistory(configId));
+  if (samples.length === 0) return null;
+  const last = samples[samples.length - 1];
+  const ok = last.ms !== null && !last.error;
+  return (
+    <div className="flex items-center gap-1.5">
+      {ok ? (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold font-mono",
+            last.ms! < 200
+              ? "bg-teal-500/15 text-teal-300"
+              : last.ms! < 500
+                ? "bg-yellow-500/15 text-yellow-400"
+                : "bg-red-500/15 text-red-400"
+          )}
+          title={`${t("configs.urlTest", language)}${last.mode === "tunnel" ? " · tunnel" : ""}`}
+        >
+          <Activity className="w-2.5 h-2.5" />
+          {last.ms}ms
+        </span>
+      ) : (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400"
+          title={last.error || t("configs.urlTestFail", language)}
+        >
+          <AlertTriangle className="w-2.5 h-2.5" />
+          {t("configs.urlTestFail", language)}
+        </span>
+      )}
+      <LatencySparkline samples={samples} />
+    </div>
+  );
+}
+
+/** Mini pure-SVG sparkline of the recent real-delay history (teal line;
+ *  failed probes drop to the floor so gaps stay visible). Hidden on narrow
+ *  viewports to keep the table compact. */
+function LatencySparkline({ samples }: { samples: LatencySample[] }) {
+  const W = 64;
+  const H = 18;
+  const valid = samples.filter(s => s.ms !== null);
+  if (valid.length < 2) return null;
+  const max = Math.max(...valid.map(s => s.ms!), 1);
+  const step = W / (samples.length - 1);
+  const pts = samples
+    .map((s, i) => {
+      const x = i * step;
+      const y = s.ms === null ? H : Math.max(1, H - (s.ms! / max) * (H - 2));
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="hidden xl:block" aria-hidden="true">
+      <polyline points={pts} fill="none" stroke="#2dd4bf" strokeWidth="1.2" opacity="0.85" />
+    </svg>
   );
 }

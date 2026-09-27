@@ -1,0 +1,38 @@
+{
+  "name": "memento-setup",
+  "productName": "MementoSetup",
+  "private": true,
+  "version": "3.2.0",
+  "description": "MEMENTO Setup — the assisted installer (design-exact wizard with real install logic; 2.0.4: install verification + hard gate for the app code + leave-no-trace rollback)",
+  "author": "Epodonios",
+  "license": "MIT",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.json",
+    "build": "npm run build:renderer && npm run build:main",
+    "sync:payload": "node scripts/sync-payload.js",
+    "dev": "vite",
+    "predist": "npm run sync:payload",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:dir": "npm run build && electron-builder --win --x64 --dir"
+  },
+  "dependencies": {
+    "lucide": "^0.545.0"
+  },
+  "devDependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/vazirmatn": "^5.2.5",
+    "@types/node": "22.19.17",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.2",
+    "vite-plugin-singlefile": "2.3.0"
+  },
+  "allowScripts": {
+    "esbuild@0.27.7": true,
+    "electron@44.3.0": true
+  }
+}

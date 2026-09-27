@@ -3,25 +3,34 @@ import { useStore } from "../store";
 import { cn } from "../utils/cn";
 import { t } from "../i18n";
 import {
-  Power, Shield, Wifi, WifiOff, Search, ChevronDown,
+  Power, Shield, ShieldAlert, Wifi, WifiOff, Search, ChevronDown,
   AlertTriangle, CheckCircle2, Copy, Download,
-  Settings, Globe, Zap, Eye, EyeOff, MonitorSmartphone, X, RefreshCcw, PlayCircle
+  Settings, Globe, Zap, Eye, EyeOff, MonitorSmartphone, X, RefreshCcw, PlayCircle, Cpu, Activity, Loader2
 } from "lucide-react";
 import toast from "react-hot-toast";
 import SectionHeader from "./SectionHeader";
+import Hint from "./Hint";
+import TrafficChart from "./TrafficChart";
+import ConnectionStatsPanel from "./ConnectionStatsPanel";
 import { generateV2RayConfig } from "../utils/v2rayConfig";
-import { isTauri, tauriInvoke } from "../utils/tauriBridge";
+import { generateSingBoxConfig } from "../utils/singBoxConfig";
+import { configCore } from "../store";
+import { isDesktop, tauriInvoke } from "../utils/tauriBridge";
 import { connectToConfig, disconnectConnection } from "../utils/connectionActions";
+import { runTunnelUrlTest } from "../utils/urlTest";
 
-type ConnMode = "direct" | "system-proxy";
+type ConnMode = "direct" | "system-proxy" | "tun";
 
 export default function ConnectionTab() {
   const {
     configs, language, pingResults, subscriptionGroups,
     connStatus, connConfigId, connPid, connStartedAt,
     connMode, connSocksPort, connHttpPort, connApiPort,
-    connDownloadBytes, connUploadBytes, connLogs,
+    connDownloadBytes, connUploadBytes, connDownSpeed, connUpSpeed, connLogs,
     setConnState, autoFailover, setAutoFailover,
+    geoPreparing, // C3 fix: explicit "Preparing geo data…" state during the connect-time geo gate
+    killSwitchArmed, // Phase C5: the blocked banner reads the same mirror the Settings toggle writes
+    builderOptions, // Phase D2 (item 9): the JSON preview must match what connect will run
   } = useStore();
 
   const isRtl = language === "fa" || language === "ar";
@@ -34,7 +43,7 @@ export default function ConnectionTab() {
 
   useEffect(() => {
     async function ensureXray() {
-      if (!isTauri()) {
+      if (!isDesktop()) {
         setXrayReady(false);
         return;
       }
@@ -69,10 +78,41 @@ export default function ConnectionTab() {
   // Local UI-only state (safe to lose on tab switch — purely presentational)
   const [showJson, setShowJson] = useState(false);
   const [configDropdownOpen, setConfigDropdownOpen] = useState(false);
+
+  // Phase C2: live-tunnel real-delay probe (spinner on the button only;
+  // the sample lands in the latencyHistory slice of the connected config).
+  const [urlTesting, setUrlTesting] = useState(false);
+  const handleTunnelUrlTest = async () => {
+    if (urlTesting || status !== "connected") return;
+    setUrlTesting(true);
+    try {
+      const outcome = await runTunnelUrlTest(connSocksPort, connConfigId);
+      if (outcome.ok && outcome.ms !== null) {
+        toast.success(t("connection.urlTestDone", language).replace("{ms}", String(outcome.ms)));
+      } else {
+        toast.error(t("connection.urlTestFail", language).replace("{error}", outcome.error || ""));
+      }
+    } finally {
+      setUrlTesting(false);
+    }
+  };
   const [search, setSearch] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [showLogs, setShowLogs] = useState(false);
   const [showFailoverSettings, setShowFailoverSettings] = useState(false);
+
+  /* ---- Phase D1: IP & leak check (result is presentational -> local state) ---- */
+  interface IpPathResult {
+    ok: boolean; ip?: string; loc?: string; warp?: string; error?: string;
+  }
+  interface NetCheckResult {
+    exit: IpPathResult;
+    direct: IpPathResult;
+    dnsServers: string[];
+  }
+  const [ipChecking, setIpChecking] = useState(false);
+  const [ipResult, setIpResult] = useState<NetCheckResult | null>(null);
+  const [ipPort, setIpPort] = useState(0);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -83,10 +123,20 @@ export default function ConnectionTab() {
     [validConfigs, connConfigId],
   );
 
+  // Task 11: preview honors the same dual-core routing the real connect
+  // uses — hysteria2/tuic preview their sing-box JSON (with a fresh clash_api
+  // secret each render; the running connection's secret lives in main only).
   const v2rayConfig = useMemo(() => {
     if (!selectedConfig) return null;
-    return generateV2RayConfig(selectedConfig, "socks-http", connSocksPort, connHttpPort, connApiPort);
-  }, [selectedConfig, connSocksPort, connHttpPort, connApiPort]);
+    return configCore(selectedConfig) === "sing-box"
+      ? generateSingBoxConfig(selectedConfig, connSocksPort, connHttpPort, connApiPort, builderOptions)
+      : generateV2RayConfig(selectedConfig, "socks-http", connSocksPort, connHttpPort, connApiPort, builderOptions);
+  }, [selectedConfig, connSocksPort, connHttpPort, connApiPort, builderOptions]);
+
+  /** Core badge label for the ACTIVE connection ("sing-box" full text). */
+  const activeCoreLabel = selectedConfig
+    ? configCore(selectedConfig) === "sing-box" ? "sing-box" : "Xray"
+    : null;
 
   const filteredConfigs = useMemo(() => {
     if (!search.trim()) return validConfigs;
@@ -143,13 +193,73 @@ export default function ConnectionTab() {
     await connectToConfig(selectedConfig.id);
   };
 
+  // R3 task #2: the VPN Device (TUN) pill + the elevation outcome live in
+  // the global routing view — poll it while this tab is mounted so the
+  // UAC feedback toasts (accepted/cancelled/failed) always land.
+  const lastLaunchFeedbackAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const rv = await tauriInvoke<any>("routing_status");
+        if (cancelled) return;
+        if (rv?.launchFeedback && rv.launchFeedback.atMs !== lastLaunchFeedbackAtRef.current) {
+          lastLaunchFeedbackAtRef.current = rv.launchFeedback.atMs;
+          if (rv.launchFeedback.ok) {
+            toast.success(t("connection.tunUacAccepted", language), { duration: 6000 });
+          } else {
+            toast.error(
+              `${t("connection.tunUacFailed", language)}${rv.launchFeedback.message ? `\n${rv.launchFeedback.message}` : ""}`,
+              { duration: 12000, style: { whiteSpace: "pre-line", maxWidth: 480 } }
+            );
+          }
+        }
+      } catch {
+        /* routing_status unavailable — best-effort */
+      }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [language]);
+
   const handleDisconnect = async () => {
     await disconnectConnection({ manual: true });
     toast.success(t("connection.disconnected", language));
   };
 
+  /* ---- Phase D1: IP & leak check ----
+   * The main process probes Cloudflare's trace endpoint twice (through the
+   * given local SOCKS port on a throwaway session + direct via Node https).
+   * Port selection: an Aether session tests the AETHER core's socks port,
+   * everything else tests the config connection's port — so the button is
+   * meaningful for all three cores. */
+  const handleIpCheck = async () => {
+    if (ipChecking) return;
+    setIpChecking(true);
+    try {
+      const st = useStore.getState();
+      const aetherLive = st.aetherStatus === "connected" || st.aetherStatus === "connecting";
+      const port = aetherLive
+        ? (st.aetherInfo?.socks_port || 0)
+        : st.connSocksPort;
+      setIpPort(port);
+      const res = await tauriInvoke<NetCheckResult>("net_check", { socksPort: port });
+      if (res) setIpResult(res);
+      else toast.error(t("ipcheck.browserMode", language));
+    } catch (err: any) {
+      toast.error(String(err?.message || err || "IP check failed"), { duration: 6000 });
+    } finally {
+      setIpChecking(false);
+    }
+  };
+
   const handleLaunchSpoofingPatt = async () => {
-    if (!isTauri()) {
+    if (!isDesktop()) {
       toast.error("Spoofing Patt can only be launched from the installed desktop app.");
       return;
     }
@@ -219,11 +329,20 @@ export default function ConnectionTab() {
     return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
   };
 
+  /** Phase D1: throughput formatting — bytes/second input. */
+  const fmtSpeed = (bps: number) => {
+    if (bps < 1024) return `${bps} B/s`;
+    if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} KB/s`;
+    if (bps < 1024 * 1024 * 1024) return `${(bps / 1024 / 1024).toFixed(1)} MB/s`;
+    return `${(bps / 1024 / 1024 / 1024).toFixed(2)} GB/s`;
+  };
+
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6 fade-in">
       <SectionHeader
         titleKey="tab.connection"
         descKey="desc.connection"
+        hintKey="hint.connection"
         icon={Shield}
       />
 
@@ -232,6 +351,21 @@ export default function ConnectionTab() {
         "rounded-3xl border p-6 transition-all duration-500 scale-in",
         statusBg[status],
       )}>
+        {/* Phase C5: honest blocked banner — the switch is ARMED and the
+            tunnel is DOWN, so system-proxy apps are failing closed right
+            now. Red + role=alert: the one state the user must understand
+            at a glance (it looks like “no internet” — because it is). */}
+        {killSwitchArmed && (status === "disconnected" || status === "error") && (
+          <div role="alert" className="mb-4 rounded-2xl border border-red-500/40 bg-red-950/60 px-4 py-3">
+            <div className="flex items-start gap-3">
+              <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-red-300">{t("connection.killSwitchBlocked", language)}</p>
+                <p className="text-[11px] text-surface-400 mt-1">{t("connection.killSwitchBlockedHint", language)}</p>
+              </div>
+            </div>
+          </div>
+        )}
         <div className={cn("flex flex-wrap items-center justify-between gap-4", isRtl && "flex-row-reverse")}>
           <div className={cn("flex items-center gap-4", isRtl && "flex-row-reverse")}>
             <div className={cn(
@@ -263,6 +397,20 @@ export default function ConnectionTab() {
                   {selectedConfig && ` · ${selectedConfig.name || selectedConfig.address}`}
                 </p>
               )}
+              {status === "connected" && activeCoreLabel && (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold border",
+                    activeCoreLabel === "sing-box"
+                      ? "bg-pink-500/10 text-pink-300 border-pink-500/30"
+                      : "bg-surface-500/10 text-ink-300 border-surface-500/30"
+                  )}
+                  title="Proxy core running this connection"
+                >
+                  <Cpu className="w-2.5 h-2.5" />
+                  {activeCoreLabel}
+                </span>
+              )}
               {status === "connected" && connMode === "system-proxy" && (
                 <p className="text-xs text-emerald-400 font-semibold mt-0.5 flex items-center gap-1">
                   <Globe className="w-3 h-3" />
@@ -288,6 +436,41 @@ export default function ConnectionTab() {
                 </div>
               </div>
 
+              {/* Phase D1: live throughput — delta between consecutive 3 s polls */}
+              <div
+                className="px-3 py-1.5 rounded-xl bg-surface-950/80 border border-cyan-500/25 flex items-center gap-3 text-xs font-mono"
+                title={t("connection.liveSpeed", language)}
+              >
+                <div className="flex items-center gap-1">
+                  <span className="text-emerald-400">↓</span>
+                  <span className={cn("font-bold tabular-nums", connDownSpeed > 0 ? "text-cyan-300" : "text-ink-400")}>
+                    {fmtSpeed(connDownSpeed)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-yellow-400">↑</span>
+                  <span className={cn("font-bold tabular-nums", connUpSpeed > 0 ? "text-cyan-300" : "text-ink-400")}>
+                    {fmtSpeed(connUpSpeed)}
+                  </span>
+                </div>
+                <span className={cn("w-1.5 h-1.5 rounded-full", connDownSpeed + connUpSpeed > 0 ? "bg-cyan-400 pulse-glow" : "bg-ink-600")} />
+              </div>
+
+              <button
+                onClick={handleTunnelUrlTest}
+                disabled={urlTesting}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors",
+                  urlTesting
+                    ? "bg-teal-500/20 text-teal-300 animate-pulse cursor-wait"
+                    : "bg-teal-500/10 text-teal-300 hover:bg-teal-500/20"
+                )}
+                title={t("connection.urlTest", language)}
+              >
+                <Activity className={cn("w-3.5 h-3.5", urlTesting && "animate-spin")} />
+                {t("connection.urlTest", language)}
+              </button>
+
               <button
                 onClick={() => setShowLogs(!showLogs)}
                 className="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-400 text-xs font-bold flex items-center gap-1 hover:bg-emerald-500/20 cursor-pointer"
@@ -297,8 +480,33 @@ export default function ConnectionTab() {
             </div>
           )}
 
-          {/* Big connect/disconnect button */}
-          {status === "disconnected" || status === "error" ? (
+          {/* Phase C1 (item 5): live traffic chart — mounted ONLY while
+              connected, data-driven by the standalone trafficHistory slice
+              (useSyncExternalStore), so no other component re-renders on
+              sample pushes (App.tsx:61-64 perf rule respected). */}
+          {status === "connected" && <TrafficChart language={language} />}
+
+          {/* Phase E1: live per-connection stats panel — self-polling, only
+              while connected AND expanded; the aggregate counters/chart
+              above keep their own untouched data path. */}
+          {status === "connected" && <ConnectionStatsPanel language={language} />}
+
+          {/* Big connect/disconnect button. C3 fix (user-approved): while
+              the geo gate is downloading (geoPreparing), show an explicit
+              disabled "Preparing geo data…" state — the gate can take up to
+              ~120s/file on a slow network and must never look like a dead
+              Connect button. Re-entry is also blocked at the store level
+              (connectionActions guard), covering ConfigsTab quick-connect. */}
+          {geoPreparing ? (
+            <button
+              disabled
+              aria-live="polite"
+              className="flex items-center gap-3 px-8 py-4 rounded-2xl text-lg font-extrabold bg-yellow-500/10 text-yellow-400 border border-yellow-500/30 cursor-wait"
+            >
+              <Loader2 className="w-6 h-6 animate-spin" />
+              {t("connection.preparingGeo", language)}
+            </button>
+          ) : status === "disconnected" || status === "error" ? (
             <button
               onClick={handleConnect}
               disabled={!selectedConfig}
@@ -347,8 +555,9 @@ export default function ConnectionTab() {
             <RefreshCcw className={cn("w-5 h-5", autoFailover.enabled ? "text-black/80" : "text-ink-400")} />
           </div>
           <div>
-            <p className="text-sm font-extrabold dark:text-white">
+            <p className="text-sm font-extrabold dark:text-white flex items-center gap-1.5">
               {language === "en" || language === "zh" ? "Auto Failover" : "تعویض خودکار کانفیگ"}
+              <Hint text={t("hint.autoFailover", language)} size="sm" />
             </p>
             <p className="text-[11px] text-ink-400">
               {autoFailover.enabled
@@ -442,6 +651,11 @@ export default function ConnectionTab() {
                     )}>
                       {selectedConfig.protocol}
                     </span>
+                    {configCore(selectedConfig) === "sing-box" && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-pink-500/10 text-pink-300 border border-pink-500/30">
+                        sing-box
+                      </span>
+                    )}
                     <span className="truncate">{selectedConfig.name || selectedConfig.address}</span>
                     <span className="text-ink-500 font-mono text-xs">:{selectedConfig.port}</span>
                   </span>
@@ -536,26 +750,35 @@ export default function ConnectionTab() {
               {t("connection.mode", language)}
             </label>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
                 {
                   id: "direct" as ConnMode,
                   icon: Wifi,
                   label: t("connection.modeDirect", language),
                   desc: t("connection.modeDirectDesc", language),
+                  hint: t("hint.modeDirect", language),
                 },
                 {
                   id: "system-proxy" as ConnMode,
                   icon: MonitorSmartphone,
                   label: t("connection.modeProxy", language),
                   desc: t("connection.modeProxyDesc", language),
+                  hint: t("hint.modeProxy", language),
+                },
+                {
+                  id: "tun" as ConnMode,
+                  icon: Globe,
+                  label: t("connection.modeTun", language),
+                  desc: t("connection.modeTunDesc", language),
+                  hint: t("hint.modeTun", language),
                 },
               ].map(mode => (
                 <button
                   key={mode.id}
                   onClick={() => setConnState({ connMode: mode.id })}
                   className={cn(
-                    "flex flex-col items-start gap-2 p-4 rounded-xl border transition-all duration-200 text-left",
+                    "relative flex flex-col items-start gap-2 p-4 rounded-xl border transition-all duration-200 text-left",
                     connMode === mode.id
                       ? "border-emerald-400 bg-emerald-500/10 shadow-md shadow-emerald-500/10 scale-[1.02]"
                       : "border-surface-700/60 bg-surface-900/40 hover:border-surface-500",
@@ -563,6 +786,12 @@ export default function ConnectionTab() {
                   )}
                   disabled={status === "connected"}
                 >
+                  <span className={cn(
+                    "absolute top-2 end-2",
+                    status === "connected" && "pointer-events-none",
+                  )}>
+                    <Hint text={mode.hint} size="sm" />
+                  </span>
                   <mode.icon className={cn(
                     "w-5 h-5",
                     connMode === mode.id ? "text-emerald-400" : "text-ink-400",
@@ -620,7 +849,7 @@ export default function ConnectionTab() {
               ? "border-yellow-500/30 bg-yellow-500/5"
               : xrayReady
                 ? "border-emerald-500/20 bg-emerald-500/5"
-                : isTauri()
+                : isDesktop()
                   ? "border-red-500/20 bg-red-500/5"
                   : "border-yellow-500/20 bg-yellow-500/5",
           )}>
@@ -629,7 +858,7 @@ export default function ConnectionTab() {
                 <div className="w-5 h-5 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin shrink-0 mt-0.5" />
               ) : xrayReady ? (
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-              ) : isTauri() ? (
+              ) : isDesktop() ? (
                 <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
               ) : (
                 <AlertTriangle className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" />
@@ -640,7 +869,7 @@ export default function ConnectionTab() {
                     ? "Downloading xray-core… Please wait"
                     : xrayReady
                       ? `xray-core Ready ✓`
-                      : isTauri()
+                      : isDesktop()
                         ? "xray-core not found — retrying…"
                         : t("connection.browserMode", language)}
                 </p>
@@ -649,12 +878,12 @@ export default function ConnectionTab() {
                     ? "MEMENTO is downloading xray-core automatically. This only happens once (~15 MB)."
                     : xrayReady
                       ? `Installed at: ${xrayPath}`
-                      : isTauri()
+                      : isDesktop()
                         ? "MEMENTO will auto-download xray-core when you click Connect."
                         : t("connection.browserDesc", language)}
                 </p>
 
-                {!isTauri() && (
+                {!isDesktop() && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={handleCopyJson}
@@ -676,6 +905,125 @@ export default function ConnectionTab() {
                 )}
               </div>
             </div>
+          </div>
+
+          {/* ---- Phase D1: IP & DNS-leak check ---- */}
+          <div className={cn(
+            "rounded-2xl border p-5 transition-all duration-300 shadow-xl",
+            "dark:border-surface-700/60 dark:bg-surface-900/50",
+          )}>
+            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+              <span className="text-sm font-extrabold dark:text-white flex items-center gap-2">
+                <Globe className="w-4 h-4 text-emerald-400" />
+                {t("ipcheck.title", language)}
+              </span>
+              <button
+                onClick={handleIpCheck}
+                disabled={ipChecking}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                  ipChecking
+                    ? "bg-cyan-500/15 text-cyan-300 cursor-wait"
+                    : "bg-gradient-to-r from-cyan-400 to-sky-600 text-white shadow-md shadow-cyan-500/20 hover:brightness-110 active:scale-95",
+                )}
+              >
+                <RefreshCcw className={cn("w-3 h-3", ipChecking && "animate-spin")} />
+                {ipChecking ? t("ipcheck.checking", language) : t("ipcheck.check", language)}
+              </button>
+            </div>
+
+            <p className="text-[11px] text-ink-400 leading-relaxed mb-3">
+              {t("ipcheck.desc", language)}
+            </p>
+
+            {!ipResult ? (
+              <p className="text-xs text-ink-500">{t("ipcheck.idle", language)}</p>
+            ) : (
+              <div className="space-y-2.5">
+                {/* Through-tunnel IP (tested against the local SOCKS port) */}
+                <div className="rounded-xl border border-surface-700/60 bg-surface-950/50 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider">
+                      {t("ipcheck.exit", language).replace("{port}", String(ipPort))}
+                    </p>
+                    {ipResult.exit.ok && ipResult.exit.warp && ipResult.exit.warp !== "off" && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-orange-500/15 text-orange-300 border border-orange-500/30">
+                        WARP: {ipResult.exit.warp}
+                      </span>
+                    )}
+                  </div>
+                  {ipResult.exit.ok ? (
+                    <p className="text-sm font-mono font-bold text-emerald-400 mt-0.5 break-all">
+                      {ipResult.exit.ip}
+                      {ipResult.exit.loc && (
+                        <span className="text-ink-400 text-xs font-sans font-semibold"> · {ipResult.exit.loc}</span>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-red-400 font-mono mt-0.5 break-all" title={ipResult.exit.error}>
+                      {ipResult.exit.error}
+                    </p>
+                  )}
+                </div>
+
+                {/* Direct IP (Node https, never proxied) */}
+                <div className="rounded-xl border border-surface-700/60 bg-surface-950/50 px-3 py-2.5">
+                  <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider">
+                    {t("ipcheck.direct", language)}
+                  </p>
+                  {ipResult.direct.ok ? (
+                    <p className="text-sm font-mono font-bold text-sky-400 mt-0.5 break-all">
+                      {ipResult.direct.ip}
+                      {ipResult.direct.loc && (
+                        <span className="text-ink-400 text-xs font-sans font-semibold"> · {ipResult.direct.loc}</span>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-red-400 font-mono mt-0.5 break-all" title={ipResult.direct.error}>
+                      {ipResult.direct.error}
+                    </p>
+                  )}
+                </div>
+
+                {/* Verdict */}
+                {ipResult.exit.ok && ipResult.direct.ok && (
+                  <div className={cn(
+                    "rounded-xl px-3 py-2.5 flex items-center gap-2 text-xs font-bold border",
+                    ipResult.exit.ip !== ipResult.direct.ip
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                      : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400",
+                  )}>
+                    {ipResult.exit.ip !== ipResult.direct.ip
+                      ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                    {ipResult.exit.ip !== ipResult.direct.ip
+                      ? t("ipcheck.diff", language)
+                      : t("ipcheck.same", language)}
+                  </div>
+                )}
+
+                {/* System DNS resolvers */}
+                <div className="rounded-xl border border-surface-700/60 bg-surface-950/50 px-3 py-2.5">
+                  <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
+                    {t("ipcheck.dns", language)}
+                  </p>
+                  {ipResult.dnsServers.length === 0 ? (
+                    <p className="text-xs font-mono text-ink-500">—</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {ipResult.dnsServers.map((s, i) => (
+                        <span key={`${s}-${i}`} className="px-1.5 py-0.5 rounded-md text-[10px] font-mono bg-surface-800 text-ink-300 border border-surface-700/60">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-ink-500 leading-relaxed mt-1.5">
+                    {t("ipcheck.dnsHint", language)}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Live Logs — stays visible after an unexpected disconnect too,

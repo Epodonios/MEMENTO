@@ -1,0 +1,233 @@
+{
+  "manifest": "MEMENTO third-party license and origin manifest",
+  "manifestVersion": 1,
+  "generated": "2026-09-20",
+  "liveEvidenceDate": "2026-09-20",
+  "authority": {
+    "machineReadable": "THIS FILE (resources/THIRD-PARTY.json) is the machine-readable authority for every third-party component that rides the MEMENTO distribution.",
+    "humanReadable": "NOTICE.md (electron-app root) is the human-readable attribution registry derived from this manifest.",
+    "verbatimTexts": "resources/licenses/ carries the verbatim license texts that MUST ride every distribution (each entry's licenseTextSha256 below pins its exact bytes). The wintun bespoke text stays at resources/wintun/wintun-LICENSE.txt (Phase B0 provenance).",
+    "pinAuthority": "electron/core-versions.json is the single source of truth for core versions; electron/wintunPin.ts for the wintun artifact identity; electron/aether-versions.json for the Aether update-service pins; the two package-lock.json files for npm versions.",
+    "updateRule": "Any component bump re-verifies the license from the official source and updates THIS file + NOTICE.md + resources/licenses/ in the SAME reviewed commit (the wintunPin bump discipline, generalized)."
+  },
+  "app": {
+    "name": "MEMENTO",
+    "description": "V2Ray Config Editor by Epodonios",
+    "license": "MIT",
+    "author": "Epodonios",
+    "declaredIn": "package.json (license: MIT)"
+  },
+  "scope": {
+    "covered": "Every third-party component that rides the built distribution (the electron-builder portable exe): the bundled core binaries and driver, the Electron runtime shell, the main-process runtime npm dependency, every npm package actually imported by the renderer (bundled into dist/ by vite-plugin-singlefile, fonts inlined via assetsInlineLimit), and the datasets the app fetches at runtime into the user data dir.",
+    "verificationBasis": "Live evidence gathered 2026-09-20: license facts re-verified from upstream sources (LICENSE files fetched at the exact pinned tags; registry mirrors cross-checked); renderer imports enumerated from src/ (grep of every import statement); npm versions read from the two package-lock.json files; binary hashes cross-checked against the on-disk pin authorities."
+  },
+  "bundled": [
+    {
+      "name": "Xray-core",
+      "version": "v25.1.1",
+      "role": "primary proxy core (vmess/vless/trojan/ss/socks) — runs as the xray.exe child process",
+      "origin": "https://github.com/XTLS/Xray-core",
+      "sourceTag": "https://github.com/XTLS/Xray-core/releases/tag/v25.1.1",
+      "licenseId": "MPL-2.0",
+      "licenseText": "resources/licenses/Xray-core-v25.1.1-MPL-2.0.txt",
+      "licenseTextSha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "licenseProvenance": "Fetched verbatim 2026-09-20 from the pinned tag: https://raw.githubusercontent.com/XTLS/Xray-core/v25.1.1/LICENSE (373 lines); license id cross-checked against the repo README badge, deps.dev and pkg.go.dev (all MPL-2.0).",
+      "delivery": "Bundled at build time as resources/xray/xray.exe (sync-resources from the legacy Tauri tree) AND auto-downloaded at runtime by electron/download.ts from the official XTLS GitHub releases when absent — both paths pinned to v25.1.1.",
+      "pinAuthority": "electron/core-versions.json (\"xray\": \"v25.1.1\") + the XRAY_VERSION constant in electron/paths.ts",
+      "compliance": "MPL-2.0: file-level copyleft; MEMENTO links to the core as a separate executable via its standard CLI/config interface and modifies nothing upstream; the verbatim license text rides in resources/licenses/."
+    },
+    {
+      "name": "sing-box",
+      "version": "1.14.0",
+      "role": "proxy core for Hysteria2/TUIC configs + the TUN inbound engine that loads wintun.dll (stack: mixed)",
+      "origin": "https://github.com/SagerNet/sing-box",
+      "sourceTag": "https://github.com/SagerNet/sing-box/releases/tag/v1.14.0",
+      "licenseId": "GPL-3.0-or-later",
+      "licenseText": "resources/licenses/sing-box-v1.14.0-GPL-3.0.txt (full canonical GPLv3, 674 lines) + resources/licenses/sing-box-v1.14.0-LICENSE-notice.txt (the upstream LICENSE file, verbatim, 17 lines — includes sing-box's name-association clause)",
+      "licenseTextSha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 (canonical GPLv3 text, 35,147 bytes); upstream notice: 650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c",
+      "licenseProvenance": "Verified live 2026-09-20: the upstream LICENSE at tag v1.14.0 is the GNU GPL notice header ('version 3 ... or (at your option) any later version', Copyright (C) 2022 nekohasekai) WITHOUT the full text embedded — so the full canonical GPLv3 text rides separately (sha256 8ceb4b9e... is the well-known digest of the canonical gnu.org gpl-3.0.txt; fetched from the gcc-mirror/gcc COPYING3 canonical copy because gnu.org is unreachable from the build sandbox; upstream notice fetched from the pinned tag).",
+      "delivery": "Bundled, version-pinned, NO auto-download: resources/sing-box/sing-box.exe placed from the official release zip (sha256-pinned in resources/sing-box/README.md: 3ffb56267da14e287be48bd10cf7e6505260125bad940b75101fbb4d5d58e5d6).",
+      "pinAuthority": "electron/core-versions.json (\"sing-box\": \"1.14.0\") + resources/sing-box/README.md",
+      "compliance": "GPL-3.0: MEMENTO spawns the unmodified sing-box.exe as a separate process through its documented CLI/config interface (no linking) — an aggregate, not a derivative. Obligations honored: (a) the verbatim license text rides in resources/licenses/; (b) corresponding source for the pinned binary is publicly available at the sourceTag above, recorded here and in NOTICE.md (the complete-source-offer path).",
+      "notes": "The upstream LICENSE notice adds: 'no derivative work may use the name or imply association with this application without prior consent' — MEMENTO makes no such claim."
+    },
+    {
+      "name": "Aether",
+      "version": "1.9.0",
+      "role": "third core (SOCKS5 phase: masque/wg/gool), configured 100% via AETHER_* environment variables, zero CLI arguments",
+      "origin": "https://github.com/CluvexStudio/Aether",
+      "sourceTag": "https://github.com/CluvexStudio/Aether/releases/tag/v1.9.0",
+      "licenseId": "AGPL-3.0-only",
+      "licenseText": "resources/licenses/Aether-v1.9.0-AGPL-3.0.txt",
+      "licenseTextSha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+      "licenseProvenance": "Fetched verbatim 2026-09-20 from the pinned tag: https://raw.githubusercontent.com/CluvexStudio/Aether/v1.9.0/LICENSE (the full GNU AGPL-3.0 text, 661 lines). The repo README says only 'See the LICENSE file for licensing information'; no explicit 'or later' grant was found in the repo, hence the SPDX reading AGPL-3.0-only.",
+      "delivery": "Bundled, version-pinned, NO auto-download: resources/aether/aether.exe from the official CluvexStudio release assets (zip sha256 5c64be2f2967469c53abdbec82599cb3c2ef005b8ef8efed79ba235d4ed3eb8d; binary win32 sha256 ee400806bf73fe16e655e6478eb7442c2c4e0576c4c8ce1913ac474e846b36cd, linux e8b2a83c4ab0ad1a75dac21f2f2b9d701998f86866fde15025ffba307b7130b9) — re-verified before EVERY start by the integrity gate in electron/aether.ts.",
+      "pinAuthority": "electron/core-versions.json (\"aether\": \"1.9.0\") + electron/aether-versions.json + resources/aether/README.md",
+      "compliance": "AGPL-3.0: MEMENTO spawns the unmodified aether.exe as a separate process via its documented AETHER_* environment interface (no linking) — remote-network §13 is not triggered by a local child process, and distribution obligations reduce to the GPL-style duties: the verbatim license text rides in resources/licenses/ and the corresponding source is publicly available at the sourceTag above (recorded here and in NOTICE.md).",
+      "notes": "'Aether' is a project by CluvexStudio. MEMENTO is an UNOFFICIAL wrapper: independent UI, no affiliation; the upstream TRADEMARK.md reserves the name (attribution shown in the Aether tab)."
+    },
+    {
+      "name": "wintun.dll",
+      "version": "0.14.1 (amd64)",
+      "role": "TUN adapter driver loaded at runtime by the pinned sing-box 1.14.0 TUN inbound (stack: mixed); never renamed, patched or re-signed",
+      "origin": "https://www.wintun.net/",
+      "sourceTag": "https://www.wintun.net/builds/wintun-0.14.1.zip",
+      "licenseId": "Wintun Prebuilt Binaries License (bespoke, NOT open-source)",
+      "licenseText": "resources/wintun/wintun-LICENSE.txt (committed verbatim from the verified zip)",
+      "licenseTextSha256": "text committed at Phase B0 — identity pinned in electron/wintunPin.ts",
+      "licenseProvenance": "Live-verified from the official source 2026-09-20 (Phase B0): official zip 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51; dll e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce (byte-identical to the independent Aethon routing.rs pin); Authenticode publisher 'WireGuard LLC'.",
+      "delivery": "Placed by scripts/fetch-wintun.ps1 (Windows) / fetch-wintun.sh (sandbox/CI), which refuse ANY hash mismatch; the binary itself is never committed and resources/wintun/bin/* never rides the migration zip (binary-never-ships gate).",
+      "pinAuthority": "electron/wintunPin.ts (the ONE place) + electron/core-versions.json (\"wintun\": \"0.14.1\") + resources/wintun/README.md",
+      "compliance": "Clause 3(c): proprietary notices kept intact. Clause 3(d): redistribution only alongside software using the dll via the wintun.h Permitted API — MEMENTO loads it through sing-box's TUN inbound, unmodified. The B1 spawn gate re-verifies SHA-256 + Authenticode before every first spawn."
+    },
+    {
+      "name": "Electron",
+      "version": "44.3.0",
+      "role": "desktop runtime shell (Chromium + Node.js) packaging the app as the portable exe",
+      "origin": "https://www.electronjs.org/",
+      "sourceTag": "https://github.com/electron/electron (v44.3.0)",
+      "licenseId": "MIT",
+      "licenseText": "Per-copyright notice below; the Electron distribution's own LICENSE and LICENSES.chromium.html files ride inside every electron-builder artifact.",
+      "licenseProvenance": "Version + license read live 2026-09-20 from electron-app/package-lock.json (node_modules/electron @ 44.3.0, license MIT) and node_modules/electron/LICENSE ('Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc.'); MIT cross-checked against electronjs.org.",
+      "delivery": "Dev dependency ^44.3.0; the electron-builder portable target embeds the runtime.",
+      "compliance": "MIT: copyright + permission notice carried here and in NOTICE.md. The embedded Chromium/Node/V8 components carry their own licenses (BSD-style, LGPL and others), which ride per Electron's LICENSES.chromium.html — a real-Windows checklist item verifies that file inside the built artifact.",
+      "copyright": "Copyright (c) Electron contributors. Copyright (c) 2013-2020 GitHub Inc."
+    },
+    {
+      "name": "adm-zip",
+      "version": "0.5.18 (range ^0.5.16)",
+      "role": "main-process runtime dependency: zip extraction for the Xray auto-download and update flows",
+      "origin": "https://github.com/cthackers/adm-zip",
+      "licenseId": "MIT",
+      "licenseText": "Per-copyright notice below (standard npm MIT attribution).",
+      "licenseProvenance": "Read live 2026-09-20 from electron-app/package-lock.json (node_modules/adm-zip @ 0.5.18) and node_modules/adm-zip/LICENSE ('MIT License, Copyright (c) 2012 Another-D-Mention Software and other contributors'); MIT cross-checked against npm and Snyk.",
+      "delivery": "The ONLY production dependency of electron-app/package.json; compiled into dist-electron/ and rides inside the asar.",
+      "copyright": "Copyright (c) 2012 Another-D-Mention Software and other contributors"
+    },
+    {
+      "name": "react",
+      "version": "19.2.6",
+      "role": "renderer UI framework (bundled into dist/ by vite)",
+      "origin": "https://react.dev/",
+      "licenseId": "MIT",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/react @ 19.2.6) and node_modules/react/LICENSE; 23 src/ imports enumerated.",
+      "copyright": "Copyright (c) Meta Platforms, Inc. and affiliates."
+    },
+    {
+      "name": "react-dom",
+      "version": "19.2.6",
+      "role": "renderer DOM binding",
+      "origin": "https://react.dev/",
+      "licenseId": "MIT",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/react-dom @ 19.2.6) and node_modules/react-dom/LICENSE.",
+      "copyright": "Copyright (c) Meta Platforms, Inc. and affiliates."
+    },
+    {
+      "name": "lucide-react",
+      "version": "1.18.0",
+      "role": "renderer icon set (bundled into dist/)",
+      "origin": "https://lucide.dev/",
+      "licenseId": "ISC",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/lucide-react @ 1.18.0) and node_modules/lucide-react/LICENSE (ISC License); 21 src/ imports enumerated.",
+      "copyright": "Copyright (c) 2026 Lucide Icons and Contributors"
+    },
+    {
+      "name": "react-hot-toast",
+      "version": "2.6.0",
+      "role": "renderer toast notifications (bundled into dist/)",
+      "origin": "https://react-hot-toast.com/",
+      "licenseId": "MIT",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/react-hot-toast @ 2.6.0) and node_modules/react-hot-toast/LICENSE; 17 src/ imports enumerated.",
+      "copyright": "Copyright (c) 2020 Timo Lins"
+    },
+    {
+      "name": "zustand",
+      "version": "5.0.14",
+      "role": "renderer state store (bundled into dist/)",
+      "origin": "https://github.com/pmndrs/zustand",
+      "licenseId": "MIT",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/zustand @ 5.0.14) and node_modules/zustand/LICENSE.",
+      "copyright": "Copyright (c) 2019 Paul Henschel"
+    },
+    {
+      "name": "qrcode",
+      "version": "1.5.4",
+      "role": "renderer QR generation (bundled into dist/)",
+      "origin": "https://github.com/soldair/node-qrcode",
+      "licenseId": "MIT",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/qrcode @ 1.5.4) and node_modules/qrcode/license ('Copyright (c) 2012 Ryan Day').",
+      "copyright": "Copyright (c) 2012 Ryan Day. Based on Kazuhiko Arase's 'QRCode for JavaScript' (MIT).",
+      "notes": "Used together with jsqr (decode) for the import-a-config-from-QR flow."
+    },
+    {
+      "name": "jsqr",
+      "version": "1.4.0",
+      "role": "renderer QR decoding (bundled into dist/)",
+      "origin": "https://github.com/cozmo/jsQR",
+      "licenseId": "Apache-2.0",
+      "licenseText": "resources/licenses/jsqr-1.4.0-Apache-2.0.txt",
+      "licenseTextSha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "licenseProvenance": "Copied verbatim 2026-09-20 from node_modules/jsqr/LICENSE (the standard Apache-2.0 text, 202 lines); license id read from node_modules/jsqr/package.json ('license': 'Apache-2.0'). The upstream LICENSE carries no embedded copyright line; the upstream repository is the attribution reference.",
+      "compliance": "Apache-2.0 §4: the verbatim license text rides in resources/licenses/ and this manifest + NOTICE.md carry the attribution."
+    },
+    {
+      "name": "tailwindcss",
+      "version": "4.1.17",
+      "role": "utility CSS engine — its COMPILED output rides inside dist/ (the tool itself is dev-time only)",
+      "origin": "https://tailwindcss.com/",
+      "licenseId": "MIT",
+      "licenseProvenance": "Read live 2026-09-20 from the top-level package-lock.json (node_modules/tailwindcss @ 4.1.17) and node_modules/tailwindcss/LICENSE.",
+      "copyright": "Copyright (c) Tailwind Labs, Inc."
+    },
+    {
+      "name": "@fontsource/inter (the Inter typeface)",
+      "version": "5.3.0",
+      "role": "self-hosted UI font — the woff2 files are inlined into the single-file dist/ (assetsInlineLimit 100M), so the typeface rides the distribution",
+      "origin": "https://github.com/rsms/inter (typeface) via https://fontsource.org/fonts/inter",
+      "licenseId": "OFL-1.1",
+      "licenseText": "resources/licenses/Inter-OFL-1.1.txt",
+      "licenseTextSha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345",
+      "licenseProvenance": "Copied verbatim 2026-09-20 from node_modules/@fontsource/inter/LICENSE ('Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)' + the full SIL Open Font License 1.1 text).",
+      "compliance": "OFL-1.1: the font software is redistributed unmodified with its copyright notice and the verbatim license text (resources/licenses/); OFL's Reserved Font Name rules apply to any derivatives, of which MEMENTO makes none.",
+      "copyright": "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)"
+    },
+    {
+      "name": "@fontsource/jetbrains-mono (the JetBrains Mono typeface)",
+      "version": "5.3.0",
+      "role": "self-hosted monospace UI font — inlined into dist/ like Inter",
+      "origin": "https://github.com/JetBrains/JetBrainsMono (typeface) via https://fontsource.org/fonts/jetbrains-mono",
+      "licenseId": "OFL-1.1",
+      "licenseText": "resources/licenses/JetBrainsMono-OFL-1.1.txt",
+      "licenseTextSha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b",
+      "licenseProvenance": "Copied verbatim 2026-09-20 from node_modules/@fontsource/jetbrains-mono/LICENSE ('Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)' + the full SIL Open Font License 1.1 text).",
+      "compliance": "OFL-1.1, same terms as Inter above.",
+      "copyright": "Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)"
+    }
+  ],
+  "runtimeFetched": [
+    {
+      "name": "Xray geodata (geoip.dat + geosite.dat)",
+      "version": "the release assets of the PINNED Xray-core v25.1.1",
+      "role": "routing datasets for geosite:/geoip: rules; fetched on demand by electron/geoFiles.ts into the user data dir (XRAY_LOCATION_ASSET); a missing file is fatal at core start",
+      "origin": "https://github.com/XTLS/Xray-core/releases/tag/v25.1.1 (the geoip.dat / geosite.dat release assets)",
+      "licenseId": "Lineage attribution: the XTLS geofiles are built from the v2fly datasets — v2fly/geoip (CC BY-SA 4.0, verified live 2026-09-20 from https://raw.githubusercontent.com/v2fly/geoip/master/LICENSE) and v2fly/domain-list-community (MIT, verified live 2026-09-20 via the Arch package metadata + repo). GeoLite2-derived records inside v2fly/geoip carry MaxMind's own attribution requirements.",
+      "compliance": "Not bundled — installed into the user's data dir at runtime. Attribution is carried here and in NOTICE.md (CC BY-SA share-alike satisfied by the attribution chain to v2fly/geoip); the files ride the XTLS release channel exactly as the pinned core's own assets.",
+      "pinAuthority": "electron/geoFiles.ts (XRAY_GEO_URLS built from XRAY_VERSION) + electron/core-versions.json"
+    },
+    {
+      "name": "sing-box .srs rule-sets (geosite-ir.srs, geoip-ir.srs, geosite-category-ads-all.srs)",
+      "version": "the 'sing' branch tip of MetaCubeX/meta-rules-dat at fetch time",
+      "role": "sing-box binary rule-set twins of the Xray geo categories; fetched on demand by electron/geoFiles.ts into dataDir()/sing-box/",
+      "origin": "https://github.com/MetaCubeX/meta-rules-dat (branch 'sing')",
+      "licenseId": "NO standalone license file is published on that branch (verified live 2026-09-20: LICENSE returns HTTP 404 on both the 'sing' and 'meta' branches). The datasets are community redistributions of the v2fly families (v2fly/geoip CC BY-SA 4.0; v2fly/domain-list-community MIT) — the same lineage as the Xray geodata entry above.",
+      "compliance": "Recorded honestly: the app fetches these community files at runtime into the user data dir; attribution to MetaCubeX/meta-rules-dat and the underlying v2fly datasets is carried here and in NOTICE.md. If upstream ever publishes a license, this entry gets updated in the same reviewed commit.",
+      "pinAuthority": "electron/geoFiles.ts (SRS_URLS)"
+    }
+  ],
+  "excluded": [
+    { "name": "clsx 2.1.1, tailwind-merge 3.4.0, @tauri-apps/* 2.x", "reason": "Declared in a package.json but NOT imported anywhere in src/ (enumerated by import scan 2026-09-20) — never bundled into dist/, therefore not part of the distribution. Legacy Tauri-shell leftovers stay out of the manifest." },
+    { "name": "The dev toolchain (vite 7.3.2, @vitejs/plugin-react, vite-plugin-singlefile, @tailwindcss/vite, typescript 5.9.3, electron-builder 26.x, concurrently, cross-env, wait-on, png-to-ico, @types/*)", "reason": "Dev-time build tooling only; never executes inside the distributed app. Governed by their own packages; versions live in the two package-lock.json files." },
+    { "name": "resources/spoofing-patt/ and resources/domain-fronting/", "reason": "First-party MEMENTO companion tools of the Epodonios project (not third-party). They enter resources/ at build time from the legacy Tauri tree (sync-resources.js), which is absent from this migration bundle." },
+    { "name": "Aethon", "reason": "An internal cross-reference channel (independent reference pins: AETHER_SHA256, routing.rs WINTUN_SHA256) used for provenance cross-checks only — never shipped." }
+  ]
+}
