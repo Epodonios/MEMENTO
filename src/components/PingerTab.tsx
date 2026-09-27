@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef } from "react";
-import { useStore } from "../store";
+import { useStore, parseSingleLink } from "../store";
 import { cn } from "../utils/cn";
 import { t } from "../i18n";
 import { extractIpFromConfig } from "../utils/ping";
 import { pingManyFast } from "../utils/fastPing";
+import { runUrlTestBatch } from "../utils/urlTest";
 import { Copy, Upload, Trash2, Activity } from "lucide-react";
 import toast from "react-hot-toast";
 import SectionHeader from "./SectionHeader";
@@ -27,6 +28,9 @@ export default function PingerTab() {
   const [configsInput, setConfigsInput] = useState("");
   const [results, setResults] = useState<PingItem[]>([]);
   const [testing, setTesting] = useState(false);
+  // Phase C2: "tcp" = handshake-only batch (original flow); "url" = real
+  // end-to-end HTTP delay through a temporary core instance per link.
+  const [testMode, setTestMode] = useState<"tcp" | "url">("tcp");
   const [pendingGroupConfigs, setPendingGroupConfigs] = useState<{ added: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -62,6 +66,63 @@ export default function PingerTab() {
 
     if (lines.length === 0) {
       toast.error(t("pinger.noConfigs", language));
+      return;
+    }
+
+    /* ---------- Phase C2: real-delay URL mode ----------
+     * Every valid link is probed through its own temporary core instance
+     * (worker pool, concurrency 4) with the CURRENT builder options.
+     * Pasted links have no stable identity, so these results intentionally
+     * bypass the latencyHistory slice (they live in this tab only), and
+     * the TCP-mode add-to-group offer is not triggered here. */
+    if (testMode === "url") {
+      setTesting(true);
+      const parsedList = lines.map(l => parseSingleLink(l));
+      const items: PingItem[] = parsedList.map((cfg, i) => ({
+        index: i + 1,
+        name: cfg?.name || `Config ${i + 1}`,
+        protocol: cfg?.protocol || "unknown",
+        ip: cfg?.address || "N/A",
+        port: cfg?.port != null ? String(cfg.port) : "N/A",
+        transport: "url",
+        raw: lines[i],
+        ping: null,
+        error: cfg?.isValid ? undefined : "Unsupported or invalid",
+        testing: !!cfg?.isValid,
+      }));
+      setResults([...items]);
+
+      const idToIdx = new Map<string, number[]>();
+      const validConfigs: typeof parsedList = [];
+      parsedList.forEach((cfg, i) => {
+        if (!cfg?.isValid) return;
+        validConfigs.push(cfg);
+        const list = idToIdx.get(cfg.id) ?? [];
+        list.push(i);
+        idToIdx.set(cfg.id, list);
+      });
+
+      await runUrlTestBatch(validConfigs, {
+        recordHistory: false,
+        onResult: (r) => {
+          for (const idx of idToIdx.get(r.id) ?? []) {
+            items[idx].ping = r.ms;
+            items[idx].error = r.error;
+            items[idx].testing = false;
+          }
+          setResults([...items]);
+        },
+      });
+      items.forEach(it => { if (it.testing) it.testing = false; });
+      setResults([...items]);
+      setTesting(false);
+
+      if (notificationMode === "sound" || notificationMode === "both") {
+        playNotificationSound();
+      }
+      if (notificationMode === "toast" || notificationMode === "both") {
+        toast.success(t("pinger.completed", language));
+      }
       return;
     }
 
@@ -116,7 +177,7 @@ export default function PingerTab() {
       useStore.getState().addConfigs(successfulItems.map(r => r.raw));
       setPendingGroupConfigs({ added: successfulItems.length });
     }
-  }, [configsInput, language, notificationMode]);
+  }, [configsInput, language, notificationMode, testMode]);
 
   const lineCount = configsInput.split("\n").filter(l => l.trim()).length;
   const avgPing =
@@ -131,7 +192,7 @@ export default function PingerTab() {
 
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6 fade-in">
-      <SectionHeader titleKey="tab.pinger" descKey="desc.pinger" icon={Activity} />
+      <SectionHeader titleKey="tab.pinger" descKey="desc.pinger" hintKey="hint.pinger" icon={Activity} />
 
       {/* Input section */}
       <div className={cn(
@@ -194,6 +255,37 @@ export default function PingerTab() {
         />
       </div>
 
+      {/* Phase C2: test-mode toggle — TCP handshake vs real end-to-end HTTP
+          delay through a temporary core instance per link. */}
+      <div className="flex items-center gap-2">
+        <div className="flex rounded-xl border border-surface-700/50 overflow-hidden text-xs font-bold">
+          <button
+            onClick={() => setTestMode("tcp")}
+            disabled={testing}
+            className={cn(
+              "px-4 py-2 transition-colors disabled:opacity-50",
+              testMode === "tcp"
+                ? "bg-emerald-500/20 text-emerald-400"
+                : "dark:text-surface-400 light:text-surface-600 hover:bg-surface-700/30"
+            )}
+          >
+            Ping (TCP)
+          </button>
+          <button
+            onClick={() => setTestMode("url")}
+            disabled={testing}
+            className={cn(
+              "px-4 py-2 transition-colors border-l border-surface-700/50 disabled:opacity-50",
+              testMode === "url"
+                ? "bg-teal-500/20 text-teal-300"
+                : "dark:text-surface-400 light:text-surface-600 hover:bg-surface-700/30"
+            )}
+          >
+            {t("pinger.urlTest", language)}
+          </button>
+        </div>
+      </div>
+
       <button
         onClick={handleStartTest}
         disabled={testing || lineCount === 0}
@@ -201,11 +293,13 @@ export default function PingerTab() {
           "w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold text-white transition-all duration-200 hover:scale-[1.01]",
           testing || lineCount === 0
             ? "bg-surface-700 opacity-50 cursor-not-allowed"
-            : "bg-gradient-to-r from-emerald-400 to-green-600 hover:from-emerald-300 hover:to-green-500 text-black/80 shadow-lg shadow-emerald-500/30 glow-green"
+            : testMode === "url"
+              ? "bg-gradient-to-r from-teal-400 to-emerald-500 hover:from-teal-300 hover:to-emerald-400 text-black/80 shadow-lg shadow-teal-500/30"
+              : "bg-gradient-to-r from-emerald-400 to-green-600 hover:from-emerald-300 hover:to-green-500 text-black/80 shadow-lg shadow-emerald-500/30 glow-green"
         )}
       >
         <Activity className={cn("w-4 h-4", testing && "animate-pulse")} />
-        {testing ? t("pinger.testing", language) : t("pinger.startPinging", language)}
+        {testing ? t("pinger.testing", language) : testMode === "url" ? t("pinger.urlTest", language) : t("pinger.startPinging", language)}
       </button>
 
       {/* Results */}
@@ -344,18 +438,27 @@ export default function PingerTab() {
 }
 
 function playNotificationSound() {
-  // Create a simple beep sound using Web Audio API
-  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const oscillator = audioContext.createOscillator();
-  const gainNode = audioContext.createGain();
+  // Create a simple beep sound using Web Audio API.
+  // Guarded: AudioContext may be missing (hardened/locked-down Electron) and
+  // construction may throw (autoplay policy) — this must never break the
+  // ping-completion flow, so any failure is a silent fallback.
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const audioContext = new AudioCtx();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
 
-  oscillator.connect(gainNode);
-  gainNode.connect(audioContext.destination);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
 
-  oscillator.frequency.value = 800;
-  gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+    oscillator.frequency.value = 800;
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
 
-  oscillator.start(audioContext.currentTime);
-  oscillator.stop(audioContext.currentTime + 0.5);
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.5);
+  } catch {
+    /* audio unavailable — silent fallback */
+  }
 }

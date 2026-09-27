@@ -1,15 +1,22 @@
 import { useState, useCallback, useRef } from "react";
 import { useStore } from "../store";
 import { cn } from "../utils/cn";
-import { Upload, Clipboard, Link, X, Zap, AlertCircle, CheckCircle2, Download } from "lucide-react";
+import { Upload, Clipboard, Link, X, Zap, AlertCircle, CheckCircle2, Download, QrCode, Wand2 } from "lucide-react";
 import toast from "react-hot-toast";
 import SectionHeader from "./SectionHeader";
+import Hint from "./Hint";
 import { SelectGroupModal } from "./SubscriptionGroups";
+import ConfigBuilderTab from "./ConfigBuilderTab";
 import { t } from "../i18n";
 import { MAX_CONFIGS_PER_SOURCE } from "../utils/subscription";
+import { decodeQrImageFile, qrPayloadToLinks } from "../utils/qrShare";
 
 export default function ImportTab() {
   const { addConfigs, configs, subscriptionGroups, language } = useStore();
+  const isRtl = language === "fa" || language === "ar";
+  // Task H-b: segmented mode — the classic import paths (default) or the
+  // v2rayN-style Config Builder. Existing import functionality untouched.
+  const [mode, setMode] = useState<"quick" | "builder">("quick");
   const [textInput, setTextInput] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [urlLoading, setUrlLoading] = useState(false);
@@ -239,14 +246,43 @@ export default function ImportTab() {
     reader.readAsText(file);
   }, [addConfigs, configs.length]);
 
+  // Phase D3 (item 5): QR import — decode an image (screenshot / photo of
+  // a QR shown by another client) and feed the SAME pipeline as every other
+  // import path (addConfigs -> dedupe -> optional group assignment).
+  const handleQrImport = useCallback(async (file: File) => {
+    try {
+      const payload = await decodeQrImageFile(file);
+      const links = qrPayloadToLinks(payload);
+      if (links.length === 0) {
+        toast.error(t("qr.noLinks", language));
+        return;
+      }
+      const before = configs.length;
+      addConfigs(links);
+      const after = useStore.getState().configs.length;
+      const added = after - before;
+      if (added > 0) {
+        toast.success(t("qr.imported", language).replace("{n}", String(added)));
+        if (subscriptionGroups.length > 0) {
+          setPendingGroupConfigs({ added });
+        }
+      } else {
+        toast("All links already exist", { icon: "⚠️" });
+      }
+    } catch (e) {
+      toast.error(String((e as Error)?.message || e));
+    }
+  }, [addConfigs, configs.length, subscriptionGroups.length, language]);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const files = Array.from(e.dataTransfer.files);
     for (const file of files) {
-      handleFileImport(file);
+      if (file.type.startsWith("image/")) handleQrImport(file);
+      else handleFileImport(file);
     }
-  }, [handleFileImport]);
+  }, [handleFileImport, handleQrImport]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -261,10 +297,67 @@ export default function ImportTab() {
   return (
     <div className="flex-1 overflow-auto p-6 space-y-8 fade-in">
       {/* Header */}
-      <SectionHeader titleKey="tab.import" descKey="desc.import" icon={Download} />
+      <SectionHeader titleKey="tab.import" descKey="desc.import" hintKey="hint.import" icon={Download} />
 
+      {/* Task H-b — mode switch: Quick Import | Config Builder */}
+      <div
+        dir={isRtl ? "rtl" : "ltr"}
+        className={cn(
+          "inline-flex items-center gap-1 p-1 rounded-2xl border transition-all",
+          "dark:bg-surface-900/60 dark:border-surface-700/50",
+          "light:bg-white light:border-surface-200",
+        )}
+      >
+        <button
+          onClick={() => setMode("quick")}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all duration-300",
+            mode === "quick"
+              ? "bg-gradient-to-r from-emerald-500 to-green-600 text-black/80 shadow-lg shadow-emerald-500/25"
+              : "dark:text-surface-400 light:text-surface-500 hover:dark:text-surface-200 hover:light:text-surface-800",
+          )}
+        >
+          <Clipboard className="w-3.5 h-3.5" />
+          {language === "fa" ? "ورود سریع" : "Quick Import"}
+          <Hint text={t("hint.quickImport", language)} size="sm" />
+        </button>
+        <button
+          onClick={() => setMode("builder")}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all duration-300",
+            mode === "builder"
+              ? "bg-gradient-to-r from-emerald-500 to-green-600 text-black/80 shadow-lg shadow-emerald-500/25"
+              : "dark:text-surface-400 light:text-surface-500 hover:dark:text-surface-200 hover:light:text-surface-800",
+          )}
+        >
+          <Wand2 className="w-3.5 h-3.5" />
+          {language === "fa" ? "سازنده کانفیگ" : "Config Builder"}
+          <Hint text={t("hint.configBuilder", language)} size="sm" />
+          <span
+            className={cn(
+              "px-1.5 py-px rounded-md text-[9px] font-bold",
+              mode === "builder" ? "bg-black/25 text-black/80" : "bg-emerald-500/15 text-emerald-400",
+            )}
+          >
+            NEW
+          </span>
+        </button>
+      </div>
+
+      {mode === "builder" ? (
+        <ConfigBuilderTab
+          onImported={(added) => {
+            // Same post-import flow as every other import path: offer
+            // assignment to a subscription group when any exist.
+            if (added > 0 && subscriptionGroups.length > 0) {
+              setPendingGroupConfigs({ added });
+            }
+          }}
+        />
+      ) : (
+        <>
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 stagger">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 stagger">
         <button
           onClick={handlePasteFromClipboard}
           className={cn(
@@ -355,6 +448,35 @@ export default function ImportTab() {
             </div>
           </div>
         </div>
+
+        {/* Phase D3 (item 5): QR import — screenshot/photo of a QR from
+            another client; drop-zone also routes images here now. */}
+        <label
+          className={cn(
+            "flex items-center gap-3 p-4 rounded-2xl border transition-all duration-200 cursor-pointer hover-lift shine",
+            "dark:bg-surface-800/40 dark:border-surface-700/50 dark:hover:border-emerald-500/40",
+            "light:bg-white light:border-surface-200 light:hover:border-emerald-500/40",
+            "hover:shadow-lg hover:shadow-emerald-500/10"
+          )}
+        >
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime-400 to-emerald-500 flex items-center justify-center shrink-0 shadow-md shadow-emerald-500/30">
+            <QrCode className="w-5 h-5 text-black/80" />
+          </div>
+          <div className="text-left">
+            <div className="text-sm font-semibold dark:text-white light:text-surface-900">{t("qr.importTitle", language)}</div>
+            <div className="text-xs dark:text-surface-500 light:text-surface-400">{t("qr.importDesc", language)}</div>
+          </div>
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleQrImport(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
       </div>
 
       {/* Drop Zone + Text Input */}
@@ -442,7 +564,7 @@ export default function ImportTab() {
           Supported Protocols
         </h3>
         <div className="flex flex-wrap gap-2">
-          {["vmess://", "vless://", "trojan://", "ss://", "ssr://", "hysteria2://", "tuic://"].map(proto => (
+          {["vmess://", "vless://", "trojan://", "ss://", "ssr://", "hysteria2://", "tuic://", "memento-stls://"].map(proto => (
             <span
               key={proto}
               className={cn(
@@ -459,7 +581,15 @@ export default function ImportTab() {
           <CheckCircle2 className="w-3 h-3 text-emerald-500" />
           Also supports base64-encoded subscription lists
         </p>
+        {/* Task E2: the honest non-standard disclosure for the MEMENTO
+            ShadowTLS scheme — shown wherever the scheme is advertised. */}
+        <p className="mt-2 text-xs dark:text-amber-500/90 light:text-amber-600 flex items-start gap-1">
+          <AlertCircle className="w-3 h-3 shrink-0 mt-0.5 text-amber-500" />
+          {t("import.stlsNote", language)}
+        </p>
       </div>
+        </>
+      )}
 
       {pendingGroupConfigs && (
         <SelectGroupModal

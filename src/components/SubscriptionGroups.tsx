@@ -2,8 +2,19 @@ import { useState } from "react";
 import { useStore, SubscriptionGroup } from "../store";
 import { cn } from "../utils/cn";
 import { t } from "../i18n";
-import { Table, Plus, Trash2, Edit3, Globe, Clock, X, Save, AlertOctagon, Activity } from "lucide-react";
+import { Table, Plus, Trash2, Edit3, Globe, Clock, X, Save, AlertOctagon, Activity, BarChart3 } from "lucide-react";
 import toast from "react-hot-toast";
+
+/** Phase D2 (item 1): compact human-readable bytes for the group rows. */
+function fmtBytesShort(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${Math.round(n)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
+}
 
 export function ManageGroupsModal({ onClose }: { onClose: () => void }) {
   const {
@@ -125,6 +136,23 @@ export function ManageGroupsModal({ onClose }: { onClose: () => void }) {
                         {g.autoUpdate && (
                           <p className="text-xs text-yellow-500 font-medium mt-1 flex items-center gap-1">
                             <Clock className="w-3 h-3" /> Auto-update every {g.updateIntervalMinutes} min
+                          </p>
+                        )}
+                        {/* Phase D2 (item 1): server-reported usage — or an explicit
+                            "not reported" note when the group has a URL but the
+                            server never sent subscription-userinfo */}
+                        {g.userInfo && (
+                          <p className="text-xs text-emerald-400 font-medium mt-1 flex items-center gap-1">
+                            <BarChart3 className="w-3 h-3" />
+                            {fmtBytesShort((g.userInfo.upload || 0) + (g.userInfo.download || 0))}
+                            {g.userInfo.total ? ` / ${fmtBytesShort(g.userInfo.total)}` : ""}
+                            {g.userInfo.expire ? ` · ${t("subs.usageExpire", language).replace("{date}", new Date(g.userInfo.expire * 1000).toLocaleDateString())}` : ""}
+                          </p>
+                        )}
+                        {!g.userInfo && g.subscriptionUrl && (
+                          <p className="text-[11px] text-surface-500 mt-1 flex items-center gap-1">
+                            <BarChart3 className="w-3 h-3" />
+                            {t("subs.usageUnavailable", language)}
                           </p>
                         )}
                       </div>

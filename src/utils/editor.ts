@@ -1,6 +1,6 @@
 // Utilities for editing V2Ray config links: replace IP/host and port
 
-export type Protocol = "vmess" | "vless" | "trojan" | "ss" | "ssr" | "hysteria2" | "hy2" | "tuic" | "unknown";
+export type Protocol = "vmess" | "vless" | "trojan" | "ss" | "ssr" | "socks" | "hysteria2" | "hy2" | "tuic" | "memento-stls" | "unknown";
 
 export function detectProtocol(link: string): Protocol {
   const t = link.trim();
@@ -9,9 +9,13 @@ export function detectProtocol(link: string): Protocol {
   if (t.startsWith("trojan://")) return "trojan";
   if (t.startsWith("ssr://")) return "ssr";
   if (t.startsWith("ss://")) return "ss";
+  if (t.startsWith("socks://") || t.startsWith("socks5://")) return "socks";
   if (t.startsWith("hysteria2://")) return "hysteria2";
   if (t.startsWith("hy2://")) return "hy2";
   if (t.startsWith("tuic://")) return "tuic";
+  // Task E2: the MEMENTO ShadowTLS scheme (proprietary; isSingBoxProtocol
+  // flags it, so the Editor's sing-box guard banner covers it for free).
+  if (t.startsWith("memento-stls://")) return "memento-stls";
   return "unknown";
 }
 
@@ -58,9 +62,15 @@ export function editLink(link: string, opts: EditOptions): string {
       case "hysteria2":
       case "hy2":
       case "tuic":
+      case "memento-stls": // Task E2: creds@host:port shape (see editUserAtHost)
         return editUserAtHost(trimmed, opts);
       case "ss":
         return editSS(trimmed, opts);
+      case "socks":
+        // Task 13 (A1): URI form edits like vless/trojan (creds@host:port).
+        // The legacy whole-string base64 shape is left untouched rather
+        // than risk corrupting its base64 payload.
+        return trimmed.includes("@") ? editUserAtHost(trimmed, opts) : link;
       case "ssr":
         return editSSR(trimmed, opts);
       default:
@@ -89,7 +99,8 @@ function editVmess(link: string, opts: EditOptions): string {
 }
 
 /**
- * Handles vless://, trojan://, hysteria2://, tuic:// which all share:
+ * Handles vless://, trojan://, hysteria2://, tuic:// and the Task-E2
+ * memento-stls:// — all of which share:
  *   scheme://CREDENTIALS@HOST:PORT?query#name
  */
 function editUserAtHost(link: string, opts: EditOptions): string {

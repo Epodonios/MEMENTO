@@ -1,17 +1,22 @@
 import { useStore } from "../store";
 import { t } from "../i18n";
 import { cn } from "../utils/cn";
+import Hint from "./Hint";
 
 interface SectionHeaderProps {
   titleKey: string;
   descKey?: string;
+  /** 3.1.8 (user request #3): the colloquial "?" hint key (hint.* i18n
+   *  namespace) shown next to the section title in ALL four languages. */
+  hintKey?: string;
   icon: React.ElementType;
 }
 
-export default function SectionHeader({ titleKey, descKey, icon: Icon }: SectionHeaderProps) {
+export default function SectionHeader({ titleKey, descKey, hintKey, icon: Icon }: SectionHeaderProps) {
   const language = useStore(s => s.language);
   const isRtl = language === "fa" || language === "ar";
   const descText = descKey ? t(descKey, language) : "";
+  const hintText = hintKey ? t(hintKey, language) : "";
 
   return (
     <div className={cn("scale-in", isRtl && "text-right")} dir={isRtl ? "rtl" : "ltr"}>
@@ -25,6 +30,7 @@ export default function SectionHeader({ titleKey, descKey, icon: Icon }: Section
         <h2 className="text-2xl font-extrabold tracking-tight dark:text-white light:text-ink-900">
           {t(titleKey, language)}
         </h2>
+        {hintText && <Hint text={hintText} />}
       </div>
       {descText && descText.trim().length > 0 && (
         <p className={cn(

@@ -1,5 +1,5 @@
 // Fast ping: Tauri native TCP batch (like v2rayN) + browser fallback
-import { isTauri, tauriInvoke } from "./tauriBridge";
+import { isDesktop, tauriInvoke } from "./tauriBridge";
 import { pingIp } from "./ping";
 
 export interface FastPingTarget {
@@ -38,7 +38,7 @@ export async function pingManyFast(
 ): Promise<FastPingResult[]> {
   if (targets.length === 0) return [];
 
-  if (isTauri()) {
+  if (isDesktop()) {
     const all: FastPingResult[] = [];
     for (let i = 0; i < targets.length; i += NATIVE_BATCH_SIZE) {
       const slice = targets.slice(i, i + NATIVE_BATCH_SIZE);

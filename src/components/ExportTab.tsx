@@ -150,6 +150,7 @@ export default function ExportTab() {
           address: c.address,
           port: c.port,
           uuid: c.uuid,
+          username: c.username, // Task 13 (A1): socks only — undefined elsewhere
           security: c.security,
           network: c.network,
           sni: c.sni,
@@ -163,12 +164,16 @@ export default function ExportTab() {
 
       case "base64": {
         const raw = validConfigs.map(c => c.raw).join("\n");
-        return btoa(raw);
+        // btoa only accepts Latin1 — config names are full of Persian/Arabic/
+        // CJK/emoji remarks, which threw InvalidCharacterError and crashed
+        // the whole Export tab. Encode UTF-8 safely instead (identical output
+        // for ASCII; decodes back correctly via TextDecoder on import).
+        return btoa(unescape(encodeURIComponent(raw)));
       }
 
       case "clash": {
         const proxies = validConfigs
-          .filter(c => ["vmess", "vless", "trojan", "ss", "ssr"].includes(c.protocol))
+          .filter(c => ["vmess", "vless", "trojan", "ss", "ssr", "socks"].includes(c.protocol))
           .map(c => {
             const base: any = {
               name: c.name || `${c.protocol}-${c.address}`,
@@ -195,6 +200,11 @@ export default function ExportTab() {
               base.servername = c.sni || c.address;
               if (c.flow) base.flow = c.flow;
               if (c.fingerprint) base.clientFingerprint = c.fingerprint;
+            } else if (c.protocol === "socks") {
+              // Clash/mihomo calls SOCKS5 "socks5"
+              base.type = "socks5";
+              if (c.username) base.username = c.username;
+              if (c.password) base.password = c.password;
             } else {
               base.password = c.password;
               base.cipher = c.method || "aes-256-gcm";
@@ -243,6 +253,14 @@ export default function ExportTab() {
             ob.transport = { type: c.network || "tcp" };
             if (c.host) ob.transport.host = c.host;
             if (c.path) ob.transport.path = c.path;
+          } else if (c.protocol === "socks") {
+            // Task 13 (A1): sing-box socks outbound requires version "5"
+            // (verified with sing-box 1.14.0 `check` during research);
+            // without this branch socks rows would hit the SS fallback
+            // below and produce a broken outbound.
+            ob.version = "5";
+            if (c.username) ob.username = c.username;
+            if (c.password) ob.password = c.password;
           } else {
             ob.password = c.password;
             ob.method = c.method || "aes-256-gcm";
@@ -302,7 +320,7 @@ export default function ExportTab() {
 
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6 fade-in">
-      <SectionHeader titleKey="tab.export" descKey="desc.export" icon={Share2} />
+      <SectionHeader titleKey="tab.export" descKey="desc.export" hintKey="hint.export" icon={Share2} />
 
       {/* Format Selection Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 stagger">
@@ -687,7 +705,10 @@ function updateRawRemark(link: string, protocol: string, newName: string): strin
       const obj = JSON.parse(json);
       obj.ps = newName;
       return "vmess://" + btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
-    } else if (["vless", "trojan", "hysteria2", "tuic"].includes(protocol)) {
+    } else if (["vless", "trojan", "hysteria2", "tuic", "socks"].includes(protocol)) {
+      // socks is safe for BOTH link shapes: the "#remark" is stripped before
+      // the legacy base64 body is decoded, so appending a fragment cannot
+      // corrupt a legacy link.
       const hashIdx = link.lastIndexOf("#");
       const core = hashIdx > -1 ? link.slice(0, hashIdx) : link;
       return `${core}#${encodeURIComponent(newName)}`;

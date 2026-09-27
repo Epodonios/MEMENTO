@@ -1,7 +1,64 @@
 import { create } from "zustand";
 import type { Language } from "./i18n";
+import type { SubscriptionUserInfo } from "./utils/subscription";
+import { configIdentity } from "./utils/subscription";
+import {
+  type BuilderOptions,
+  DEFAULT_BUILDER_OPTIONS,
+  loadBuilderOptions,
+  BUILDER_OPTIONS_STORAGE_KEY,
+} from "./utils/builderOptions";
+import {
+  type RoutingOptions,
+  loadRoutingOptions,
+  ROUTING_OPTIONS_STORAGE_KEY,
+} from "./utils/routingOptions";
+import {
+  type TopologyOptions,
+  loadTopologyOptions,
+  TOPOLOGY_OPTIONS_STORAGE_KEY,
+} from "./utils/topologyOptions";
+import type { GeoStatus } from "./utils/routingOptions";
+export type { GeoStatus };
 
-export type ProtocolType = "vmess" | "vless" | "trojan" | "ss" | "ssr" | "hysteria2" | "tuic";
+export type { BuilderOptions, SubscriptionUserInfo };
+export { DEFAULT_BUILDER_OPTIONS };
+export type { RoutingOptions, GeoNeeds } from "./utils/routingOptions";
+export { DEFAULT_ROUTING_OPTIONS, routingNeedsGeo } from "./utils/routingOptions";
+export type { TopologyOptions, BalancerStrategy, TopologyInput } from "./utils/topologyOptions";
+export { DEFAULT_TOPOLOGY_OPTIONS, balancerMemberTags, trafficTagsFor } from "./utils/topologyOptions";
+
+export type ProtocolType = "vmess" | "vless" | "trojan" | "ss" | "ssr" | "socks" | "hysteria2" | "tuic" | "shadowtls";
+
+/**
+ * Task 11 dual-core: which core binary runs a config. Xray keeps everything
+ * it ever supported; sing-box serves ONLY the protocols Xray never
+ * supported natively (hysteria2, tuic, and since Task E2 the MEMENTO
+ * ShadowTLS pair — Xray has no ShadowTLS at all, live-probed 2026-09-21).
+ */
+export type CoreKind = "xray" | "sing-box";
+
+/** The sing-box-only protocols — kept in ONE place so the parser, the
+ *  config generators, the badge and the Editor banner can never drift.
+ *  Task E2 adds "shadowtls": live-probed 2026-09-21 against the pinned
+ *  cores, Xray 25.1.1 has NO ShadowTLS at all (config test exits 23 with
+ *  "infra/conf: unknown config id: shadowtls") and sing-box 1.14.0 carries
+ *  it ONLY as a transport that must be paired with an inner protocol — the
+ *  MEMENTO scheme (memento-stls://) always carries that inner trojan
+ *  credential, so it is sing-box-only BY CONSTRUCTION. */
+export function isSingBoxProtocol(protocol: string): boolean {
+  return protocol === "hysteria2" || protocol === "tuic" || protocol === "shadowtls";
+}
+
+/**
+ * Resolves the core for a config. Prefers the core field stamped at import
+ * time, but falls back to the protocol so configs saved to localStorage by
+ * OLDER app versions (no core field) still route correctly.
+ */
+export function configCore(c: Pick<ParsedConfig, "protocol" | "core">): CoreKind {
+  if (c.core) return c.core;
+  return isSingBoxProtocol(c.protocol) ? "sing-box" : "xray";
+}
 
 export interface ParsedConfig {
   id: string;
@@ -11,6 +68,8 @@ export interface ParsedConfig {
   port: number | string;
   uuid?: string;
   password?: string;
+  /** Task 13 (A1): SOCKS5 username — socks:// links only (password field reused). */
+  username?: string;
   security?: string;
   encryption?: string;
   network?: string;
@@ -25,6 +84,23 @@ export interface ParsedConfig {
   spiderX?: string;
   alpn?: string;
   method?: string;
+  /** Task 11: which core runs this config (stamped at import time). */
+  core?: CoreKind;
+  /** Task 11: hysteria2 obfs transport ("salamander") + its password. */
+  obfs?: string;
+  obfsPassword?: string;
+  /** Task 11: hysteria2 TLS-skip flag from the link (insecure=1/true). */
+  insecure?: boolean;
+  /** Task 11: tuic udp_relay_mode ("native" | "quic"). */
+  udpRelayMode?: string;
+  /** Task E2: ShadowTLS transport version ("1" | "2" | "3"; the generator
+   *  ALWAYS emits it explicitly — the pinned binary accepts exactly 1..3). */
+  stlsVersion?: string;
+  /** Task E2: ShadowTLS TRANSPORT password (the server-side users[]
+   *  credential). The link's userinfo is the INNER trojan password
+   *  (password field); without the transport password v2/v3 can never
+   *  authenticate, so the parser rejects those links loudly. */
+  stlsPassword?: string;
   raw: string;
   isValid: boolean;
   errorMessage?: string;
@@ -46,10 +122,96 @@ export interface SubscriptionGroup {
   updateIntervalMinutes?: number;     // e.g. 60
   lastUpdated?: number;               // timestamp
   configIds: string[];                // IDs of configs belonging to this group
+  /** Phase D2 (item 1): server-reported usage (upload/download/total bytes +
+   *  expire unix-seconds). Absent = server never reported it. fetchedAt marks
+   *  when the value was captured (stale data stays visible + honest). Groups
+   *  are persisted as one JSON blob, so this field rides along for free. */
+  userInfo?: SubscriptionUserInfo & { fetchedAt: number };
 }
 
 export type ConnStatus = "disconnected" | "connecting" | "connected" | "error";
-export type ConnMode = "direct" | "system-proxy";
+export type ConnMode = "direct" | "system-proxy" | "tun";
+
+/* ===================== Task 12: Aether (SOCKS5-only) =====================
+ * Renderer-side mirror of electron/aether.ts — keep the shapes in sync.
+ * "smart" is a MEMENTO-side candidate loop, NOT a core protocol value. */
+export type AetherProtocolMode = "smart" | "masque" | "wg" | "gool";
+export type AetherScanMode = "turbo" | "balanced" | "thorough" | "stealth" | "ironclad";
+export type AetherIpMode = "v4" | "v6" | "both";
+export type AetherNoize = "default" | "off" | "light" | "firewall" | "balanced" | "gfw" | "aggressive";
+export type AetherLogLevel = "error" | "warn" | "info" | "debug" | "trace";
+export type AetherEchMode = "off" | "auto" | "custom";
+
+export interface AetherSettings {
+  protocol: AetherProtocolMode;
+  scanMode: AetherScanMode;
+  socksPort: number;
+  endpoint: string;
+  noize: AetherNoize;
+  ipMode: AetherIpMode;
+  dns: string;
+  routeBlock: string;
+  routeDirect: string;
+  routesFile: string;
+  httpProxyEnabled: boolean;
+  httpProxyPort: number;
+  upstream: string;
+  ech: AetherEchMode;
+  echBase64: string;
+  fragment: boolean;
+  masqueHttp2: boolean;
+  quickReconnect: boolean;
+  logLevel: AetherLogLevel;
+  wiwOuter: string;
+  wiwInner: string;
+  wgForceOuter: string;
+  wgKeepalive: string;
+}
+
+export const DEFAULT_AETHER_SETTINGS: AetherSettings = {
+  protocol: "gool", // live-verified fastest (4.8 s vs masque 121.5 s) + Aethon GUI default parity
+  scanMode: "balanced", // core default
+  socksPort: 1819, // core default bind port
+  endpoint: "",
+  noize: "default", // omit AETHER_NOIZE → core's protocol-aware profile
+  ipMode: "v4",
+  dns: "",
+  routeBlock: "",
+  routeDirect: "",
+  routesFile: "",
+  httpProxyEnabled: false,
+  httpProxyPort: 1820,
+  upstream: "",
+  ech: "off",
+  echBase64: "",
+  fragment: false,
+  masqueHttp2: false,
+  quickReconnect: true,
+  logLevel: "info",
+  wiwOuter: "",
+  wiwInner: "",
+  wgForceOuter: "",
+  wgKeepalive: "",
+};
+
+/** Aether tab connection state — deliberately SEPARATE from the config-based
+ *  conn* fields so the ConnectionManager watcher / auto-failover logic for
+ *  config connections can never collide with the Aether session. */
+export type AetherConnStatus = "disconnected" | "connecting" | "connected" | "error";
+
+export interface AetherLiveInfo {
+  running: boolean;
+  pid: number | null;
+  socks_port: number;
+  http_port: number;
+  core: "aether";
+  ready: boolean;
+  smart: boolean;
+  candidate: string | null;
+  candidateIndex: number;
+  candidateTotal: number;
+}
+
 
 export interface AutoFailoverSettings {
   enabled: boolean;
@@ -57,6 +219,45 @@ export interface AutoFailoverSettings {
   scope: "group" | "all";
   /** Require the replacement config to use the exact same port as the one that failed. */
   matchPort: boolean;
+}
+
+/* ===================== Phase B2: VPN Device (TUN) routing =====================
+ *
+ * The Aether tab's routing segment chooses HOW the tunnel reaches apps:
+ * "socks" (the pre-B2 behavior — local SOCKS5 listener + the optional
+ * system-proxy toggle) or "vpn-device" (the B1 TUN machinery — a
+ * MementoTun adapter routes ALL system traffic into the active core's
+ * local inbound; UAC-elevated helper; D6 semantics).
+ *
+ * RoutingStatusViewWire mirrors electron/routingManager.ts's wire shape
+ * (renderer NEVER imports main-process modules — the AetherLiveInfo
+ * pattern). The D5 names (interfaceName/helperRole) arrive FROM the main
+ * process; no renderer file hardcodes them.
+ */
+export type AetherRoutingMode = "socks" | "vpn-device";
+
+export type RoutingViewStateWire =
+  | "starting"
+  | "connected"
+  | "reconnecting"
+  | "restoring"
+  | "disabled"
+  | "error"
+  | "idle";
+
+export interface RoutingStatusViewWire {
+  active: boolean;
+  state: RoutingViewStateWire;
+  message: string;
+  enginePid: number;
+  interfaceName: string;
+  helperRole: string;
+  killSwitchArmed: boolean;
+  suppressSystemProxy: boolean;
+  sessionDir: string | null;
+  updatedAtMs: number | null;
+  /** R3 task #2: async elevation outcome (UAC accepted/cancelled/failed). */
+  launchFeedback?: { ok: boolean; message: string; atMs: number } | null;
 }
 
 interface AppState {
@@ -71,10 +272,49 @@ interface AppState {
   connApiPort: number;
   connDownloadBytes: number;
   connUploadBytes: number;
+  /** Phase D1: live throughput in BYTES/SECOND, derived in ConnectionManager
+   *  from the delta between consecutive traffic polls (3 s apart). Zero when
+   *  idle/disconnected — never persisted, never restored. */
+  connDownSpeed: number;
+  connUpSpeed: number;
   connLogs: string[];
   /** True when the user explicitly clicked Disconnect — tells the auto-failover watcher to stay out of it. */
   connManualStop: boolean;
   autoFailover: AutoFailoverSettings;
+  /** Phase D2 (item 9): user-toggles over the config-generator knobs.
+   *  Defaults reproduce the previous hardcoded behavior exactly. */
+  builderOptions: BuilderOptions;
+  setBuilderOptions: (patch: Partial<BuilderOptions>) => void;
+  /** Phase C3 (items 1+2): routing presets/lists + DNS/FakeDNS options.
+   *  Same discipline as builderOptions: standalone module, localStorage
+   *  persistence, defaults = the pre-C3 behavior byte-for-byte. */
+  routingOptions: RoutingOptions;
+  setRoutingOptions: (patch: Partial<RoutingOptions>) => void;
+  /** Phase C4 (item ⑥): chain proxy + balancer toggles. Same discipline:
+   *  standalone module, localStorage persistence, defaults = pre-C4
+   *  behavior byte-for-byte (no hop, no pool, plain ["proxy"] stats). */
+  topologyOptions: TopologyOptions;
+  setTopologyOptions: (patch: Partial<TopologyOptions>) => void;
+  /** Phase C3: last geo_status snapshot from the main process (null until
+   *  the first geo_status roundtrip; browser preview stays null and the
+   *  Routing tab shows the honest "Desktop only" card). */
+  geoStatus: GeoStatus | null;
+  setGeoStatus: (s: GeoStatus | null) => void;
+  /** C3 fix (user-approved): true while connectToConfig is inside the geo
+   *  gate (geo_ensure download). Drives the ConnectionTab "Preparing geo
+   *  data…" disabled button + the connect-flow re-entry guard — the gate
+   *  can take up to ~120s/file on a slow network and the UI must never
+   *  look unresponsive during it. */
+  geoPreparing: boolean;
+  setGeoPreparing: (v: boolean) => void;
+  /** Phase C5 (kill switch): UI mirror of the appPrefs.killSwitch field
+   *  (the ENFORCEMENT lives main-side in killSwitch.ts — this boolean only
+   *  drives the Settings toggle + the Connection-tab blocked banner). The
+   *  immediate block/clear transition for arming/disarming while no core
+   *  runs rides the serialized main-side app_prefs_set handler
+   *  (fire-and-forget, serialized main-side). */
+  killSwitchArmed: boolean;
+  setKillSwitchArmed: (armed: boolean, opts?: { persist?: boolean }) => void;
   setConnState: (patch: Partial<{
     connStatus: ConnStatus;
     connConfigId: string | null;
@@ -86,10 +326,39 @@ interface AppState {
     connApiPort: number;
     connDownloadBytes: number;
     connUploadBytes: number;
+    connDownSpeed: number;
+    connUpSpeed: number;
     connLogs: string[];
     connManualStop: boolean;
   }>) => void;
   setAutoFailover: (patch: Partial<AutoFailoverSettings>) => void;
+
+  /* ===================== Task 12: Aether (global — survives tab switches) ===================== */
+  aetherSettings: AetherSettings;
+  aetherStatus: AetherConnStatus;
+  /** Last status snapshot from aether_status (readiness/smart-candidate). */
+  aetherInfo: AetherLiveInfo | null;
+  /** Monotonic attempt id — stale connect attempts must not clobber state. */
+  aetherAttempt: number;
+  /** Renderer-side system-proxy toggle for the AETHER session (default OFF
+   *  per approved decision; the main process never touches the registry for
+   *  aether — this renderer toggle owns set/clear_system_proxy). */
+  aetherSystemProxy: boolean;
+  /** Phase B2: the Aether tab's routing segment (persisted). Connect-time
+   *  choice — switching mid-session is refused by the UI. */
+  aetherMode: AetherRoutingMode;
+  /** Phase B2: last routing_status snapshot (null until the first
+   *  roundtrip; browser preview gets the honest idle mirror). */
+  routingView: RoutingStatusViewWire | null;
+  setAetherSettings: (patch: Partial<AetherSettings>) => void;
+  setAetherMode: (mode: AetherRoutingMode) => void;
+  setRoutingView: (v: RoutingStatusViewWire | null) => void;
+  setAetherState: (patch: Partial<{
+    aetherStatus: AetherConnStatus;
+    aetherInfo: AetherLiveInfo | null;
+    aetherAttempt: number;
+    aetherSystemProxy: boolean;
+  }>) => void;
 
   theme: Theme;
   language: Language;
@@ -390,6 +659,10 @@ function parseHysteria2(raw: string): Partial<ParsedConfig> {
       port,
       password,
       sni: params.get("sni") || "",
+      // Task 11: obfs transport + password + TLS-skip flag.
+      obfs: params.get("obfs") || "",
+      obfsPassword: params.get("obfs-password") || "",
+      insecure: params.get("insecure") === "1" || params.get("insecure") === "true",
       type: "hysteria2",
     };
   } catch {
@@ -426,6 +699,9 @@ function parseTUIC(raw: string): Partial<ParsedConfig> {
       uuid,
       password,
       sni: params.get("sni") || "",
+      // Task 11: udp_relay_mode + alpn (congestion_control keeps using type).
+      udpRelayMode: params.get("udp_relay_mode") || "",
+      alpn: params.get("alpn") || "",
       type: params.get("congestion_control") || "cubic",
     };
   } catch {
@@ -433,7 +709,230 @@ function parseTUIC(raw: string): Partial<ParsedConfig> {
   }
 }
 
-function parseSingleLink(rawLink: string): ParsedConfig {
+/**
+ * Task E2: MEMENTO ShadowTLS scheme — NON-STANDARD by design (no
+ * industrial-standard ShadowTLS URI exists; a fake "shadowtls://" would
+ * mislead, so MEMENTO owns this scheme and the UI labels it as
+ * proprietary). ShadowTLS is a TRANSPORT, not a standalone proxy
+ * (live-probe P5: a bare shadowtls outbound passes `sing-box check` but
+ * carries NO traffic — the inner stream must be terminated by a real
+ * protocol), so the userinfo carries the INNER trojan credential and the
+ * ShadowTLS transport parameters ride the query string:
+ *
+ *   memento-stls://<trojan-pass>@host:port?version=3
+ *     &stls-password=<transport-pass>&sni=<camo-domain>
+ *     &insecure=0|1&alpn=h2#Name
+ *
+ * Live contract (scripts/taskE2-live-tmp/probe-e2.json, pinned cores):
+ *   - P1: sing-box 1.14.0 requires the outbound TLS block for EVERY
+ *     version (1/2/3 all FATAL "TLS required" without it) and rejects
+ *     version > 3; the schema strictly rejects unknown fields.
+ *   - P2: Xray 25.1.1 does not know the protocol ("unknown config id:
+ *     shadowtls", exit 23) — sing-box-only, enforced via isSingBoxProtocol.
+ *   - P4: the exact paired outbound shape generated by singBoxConfig.ts
+ *     from this parse carried real loopback traffic end-to-end (200:14336).
+ */
+function parseShadowTLS(raw: string): Partial<ParsedConfig> {
+  try {
+    const urlPart = raw.replace("memento-stls://", "");
+    const hashIdx = urlPart.lastIndexOf("#");
+    let name = "";
+    let core = urlPart;
+    if (hashIdx > -1) {
+      name = decodeURIComponent(urlPart.slice(hashIdx + 1));
+      core = urlPart.slice(0, hashIdx);
+    }
+    const [passAtHost, ...queryParts] = core.split("?");
+    const queryStr = queryParts.join("?");
+    const atIdx = passAtHost.lastIndexOf("@");
+    const trojanPassword = atIdx > -1 ? passAtHost.slice(0, atIdx) : "";
+    const hostPort = atIdx > -1 ? passAtHost.slice(atIdx + 1) : passAtHost;
+    const colonIdx = hostPort.lastIndexOf(":");
+    const address = hostPort.slice(0, colonIdx);
+    const port = hostPort.slice(colonIdx + 1);
+    const params = new URLSearchParams(queryStr);
+
+    const version = params.get("version") || "3";
+    const stlsPassword = params.get("stls-password") || "";
+    // Honest validation (approved design E2-D2): the pinned binary accepts
+    // exactly versions 1..3 (probe P1-F: v4 -> FATAL unknown protocol
+    // version), and v2/v3 authenticate the transport with stls-password
+    // (probe P3: the server field is users[], not password) — a v2/v3 link
+    // without it can never connect, so it is rejected here, loudly.
+    if (version !== "1" && version !== "2" && version !== "3") {
+      return { isValid: false, errorMessage: "Invalid ShadowTLS version (expected 1, 2 or 3)" };
+    }
+    if ((version === "2" || version === "3") && !stlsPassword) {
+      return { isValid: false, errorMessage: "ShadowTLS v2/v3 requires stls-password" };
+    }
+
+    return {
+      protocol: "shadowtls",
+      name,
+      address,
+      port,
+      password: trojanPassword,
+      stlsVersion: version,
+      stlsPassword,
+      sni: params.get("sni") || "",
+      insecure: params.get("insecure") === "1" || params.get("insecure") === "true",
+      alpn: params.get("alpn") || "",
+      type: "shadowtls",
+    };
+  } catch {
+    return { isValid: false, errorMessage: "Failed to decode MEMENTO ShadowTLS config" };
+  }
+}
+
+/**
+ * Padding- and url-safe-tolerant atob (the parseSS pattern).
+ * Returns null when the input is not decodable base64 — callers decide
+ * whether that is a rejection or a fallback.
+ */
+function tryBase64Decode(s: string): string | null {
+  try {
+    let t = s.replace(/-/g, "+").replace(/_/g, "/");
+    if (t.length % 4 > 0) t += "=".repeat(4 - (t.length % 4));
+    return atob(t);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Task 13 (A1): native SOCKS5 share links — socks:// and socks5://.
+ *
+ * The "socks" URI scheme is NOT registered at IANA (verified 2026-09);
+ * the de-facto reference implemented here is v2rayN's SocksFmt.cs
+ * (captured at scripts/socks-report/SocksFmt.cs):
+ *
+ *   URI form   socks://[userinfo@]host:port[#remark][?query]
+ *     - userinfo is percent-decoded first, then:
+ *         contains ":" -> plain user:pass, split at the FIRST colon
+ *                         (the password may itself contain colons);
+ *         otherwise    -> treated as base64 (unpadded / url-safe
+ *                         tolerated) of user:pass — v2rayN's own export
+ *                         emits base64url("user:pass"), so base64(":")
+ *                         = "Og" = empty creds = anonymous (this is the
+ *                         exact shape of the user's sample link);
+ *         absent       -> anonymous.
+ *     - deliberate deviation from v2rayN: when userinfo EXISTS but cannot
+ *       be decoded into user:pass, v2rayN silently falls back to an
+ *       ANONYMOUS profile; we REJECT with a clear error instead — a silent
+ *       anonymous connect would only fail later at server auth with a
+ *       misleading "server unreachable".
+ *
+ *   Legacy form (no "@" after the scheme): the whole body is base64 of
+ *   "user:pass@host:port". The decoded payload must contain exactly one
+ *   "@" and creds of exactly user:pass (v2rayN ResolveSocks parity).
+ *
+ * Malformed input never throws: every rejection returns
+ * { isValid:false, errorMessage } with a human-readable reason, and the
+ * host:port pair is built only after strict validation (no wrong-address
+ * construction).
+ */
+function parseSocks(raw: string): Partial<ParsedConfig> {
+  try {
+    if (!/^socks5?:\/\//i.test(raw)) {
+      return { isValid: false, errorMessage: "Invalid SOCKS link: missing socks:// scheme" };
+    }
+    let body = raw.replace(/^socks5?:\/\//i, "");
+
+    // Remark = "#fragment" (percent-decoded); "?query" is tolerated and ignored.
+    let name = "";
+    const hashIdx = body.indexOf("#");
+    if (hashIdx > -1) {
+      try { name = decodeURIComponent(body.slice(hashIdx + 1)); }
+      catch { name = body.slice(hashIdx + 1); }
+      body = body.slice(0, hashIdx);
+    }
+    const qIdx = body.indexOf("?");
+    if (qIdx > -1) body = body.slice(0, qIdx);
+    if (!body) {
+      return { isValid: false, errorMessage: "Invalid SOCKS link: empty host:port" };
+    }
+
+    let hostPort = "";
+    let creds: string | null = null; // null = anonymous
+
+    const atIdx = body.lastIndexOf("@");
+    if (atIdx > -1) {
+      // URI form with userinfo
+      hostPort = body.slice(atIdx + 1);
+      let userinfo = body.slice(0, atIdx);
+      try { userinfo = decodeURIComponent(userinfo); } catch { /* keep raw */ }
+      if (userinfo.includes(":")) {
+        creds = userinfo;
+      } else {
+        const decoded = tryBase64Decode(userinfo);
+        if (decoded === null || !decoded.includes(":")) {
+          return {
+            isValid: false,
+            errorMessage: "Invalid SOCKS link: userinfo must be user:pass (plain or base64-encoded)",
+          };
+        }
+        creds = decoded;
+      }
+    } else if (body.includes(":")) {
+      // No userinfo — plain anonymous host:port (e.g. socks://1.2.3.4:1080)
+      hostPort = body;
+    } else {
+      // Legacy whole-string base64: base64("user:pass@host:port")
+      const decoded = tryBase64Decode(body);
+      if (decoded === null || !decoded.includes("@")) {
+        return {
+          isValid: false,
+          errorMessage:
+            "Invalid SOCKS link: body is neither host:port nor valid base64 of user:pass@host:port",
+        };
+      }
+      const parts = decoded.split("@");
+      if (parts.length !== 2 || parts[0].split(":").length !== 2) {
+        return {
+          isValid: false,
+          errorMessage: "Invalid SOCKS link: base64 payload must decode to user:pass@host:port",
+        };
+      }
+      creds = parts[0];
+      hostPort = parts[1];
+    }
+
+    // ---- host:port (shared by every variant; lastIndexOf for IPv6) ----
+    const colonIdx = hostPort.lastIndexOf(":");
+    if (colonIdx === -1) {
+      return { isValid: false, errorMessage: "Invalid SOCKS link: missing port" };
+    }
+    let address = hostPort.slice(0, colonIdx).trim();
+    const portStr = hostPort.slice(colonIdx + 1).trim();
+    if (address.startsWith("[") && address.endsWith("]")) {
+      address = address.slice(1, -1); // bracketed IPv6 -> bare address
+    }
+    if (!address) {
+      return { isValid: false, errorMessage: "Invalid SOCKS link: empty host" };
+    }
+    if (!/^\d+$/.test(portStr)) {
+      return { isValid: false, errorMessage: `Invalid SOCKS link: non-numeric port "${portStr.slice(0, 16)}"` };
+    }
+    const portNum = Number(portStr);
+    if (portNum < 1 || portNum > 65535) {
+      return { isValid: false, errorMessage: `Invalid SOCKS link: port out of range (${portStr.slice(0, 16)})` };
+    }
+
+    let username = "";
+    let password = "";
+    if (creds !== null) {
+      const cIdx = creds.indexOf(":"); // FIRST colon — password may contain more (v2rayN Split(":", 2))
+      username = creds.slice(0, cIdx);
+      password = creds.slice(cIdx + 1);
+    }
+
+    return { protocol: "socks", name, address, port: portNum, username, password };
+  } catch {
+    return { isValid: false, errorMessage: "Failed to decode SOCKS config" };
+  }
+}
+
+export function parseSingleLink(rawLink: string): ParsedConfig {
   const trimmed = rawLink.trim();
   if (!trimmed) {
     return {
@@ -471,6 +970,14 @@ function parseSingleLink(rawLink: string): ParsedConfig {
   } else if (trimmed.startsWith("tuic://")) {
     parsed = parseTUIC(trimmed);
     parsed.protocol = "tuic";
+  } else if (trimmed.startsWith("memento-stls://")) {
+    // Task E2: the MEMENTO ShadowTLS scheme (proprietary — see the
+    // parseShadowTLS docblock; the UI discloses its non-standardness).
+    parsed = parseShadowTLS(trimmed);
+    parsed.protocol = "shadowtls";
+  } else if (trimmed.startsWith("socks://") || trimmed.startsWith("socks5://")) {
+    parsed = parseSocks(trimmed);
+    parsed.protocol = "socks";
   } else {
     return {
       id: generateId(),
@@ -492,6 +999,7 @@ function parseSingleLink(rawLink: string): ParsedConfig {
     port: parsed.port || "",
     uuid: parsed.uuid || "",
     password: parsed.password || "",
+    username: parsed.username || "",
     security: parsed.security || "",
     encryption: parsed.encryption || "",
     network: parsed.network || "",
@@ -503,7 +1011,17 @@ function parseSingleLink(rawLink: string): ParsedConfig {
     fingerprint: parsed.fingerprint || "",
     publicKey: parsed.publicKey || "",
     shortId: parsed.shortId || "",
+    alpn: parsed.alpn || "",
     method: parsed.method || "",
+    // Task 11: dual-core pass-through + core stamp by scheme.
+    core: parsed.core || (isSingBoxProtocol(parsed.protocol || "") ? "sing-box" : "xray"),
+    obfs: parsed.obfs || "",
+    obfsPassword: parsed.obfsPassword || "",
+    insecure: parsed.insecure,
+    udpRelayMode: parsed.udpRelayMode || "",
+    // Task E2: ShadowTLS transport pair (version always explicit downstream).
+    stlsVersion: parsed.stlsVersion || "",
+    stlsPassword: parsed.stlsPassword || "",
     raw: trimmed,
     isValid: parsed.isValid !== undefined ? parsed.isValid : true,
     errorMessage: parsed.errorMessage,
@@ -624,6 +1142,8 @@ export const useStore = create<AppState>((set, get) => ({
   connApiPort: 10850,
   connDownloadBytes: 0,
   connUploadBytes: 0,
+  connDownSpeed: 0,
+  connUpSpeed: 0,
   connLogs: [],
   connManualStop: false,
   autoFailover: (() => {
@@ -634,6 +1154,52 @@ export const useStore = create<AppState>((set, get) => ({
       return { enabled: false, scope: "group", matchPort: false };
     }
   })(),
+  builderOptions: loadBuilderOptions(),
+  routingOptions: loadRoutingOptions(),
+  topologyOptions: loadTopologyOptions(),
+  geoStatus: null,
+  geoPreparing: false,
+  killSwitchArmed: false, // Phase C5: boot-loaded from app_prefs_get (App.tsx)
+
+  setBuilderOptions: (patch) => {
+    set(state => {
+      const next = { ...state.builderOptions, ...patch };
+      try { localStorage.setItem(BUILDER_OPTIONS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return { builderOptions: next };
+    });
+  },
+
+  setRoutingOptions: (patch) => {
+    set(state => {
+      const next = { ...state.routingOptions, ...patch };
+      try { localStorage.setItem(ROUTING_OPTIONS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return { routingOptions: next };
+    });
+  },
+
+  setTopologyOptions: (patch) => {
+    set(state => {
+      const next = { ...state.topologyOptions, ...patch };
+      try { localStorage.setItem(TOPOLOGY_OPTIONS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return { topologyOptions: next };
+    });
+  },
+
+  setGeoStatus: (s) => set({ geoStatus: s }),
+
+  setGeoPreparing: (v) => set({ geoPreparing: v }),
+
+  // Phase C5: the mirror only records the arm flag; the IMMEDIATE block/
+  // clear transition for arming/disarming while no core is running is
+  // main-side — the serialized app_prefs_set handler runs the immediate
+  // arm/disarm transition).
+  setKillSwitchArmed: (armed, opts) => {
+    set({ killSwitchArmed: armed });
+    // persist:false = the boot load (reply-is-authority): the value came
+    // FROM the main process, so it must not be echoed back.
+    if (opts?.persist === false) return;
+    (window as any).electronAPI?.invoke("app_prefs_set", { patch: { killSwitch: armed } })?.catch(() => {});
+  },
 
   setConnState: (patch) => {
     if ("connMode" in patch && patch.connMode) {
@@ -656,44 +1222,130 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
+  /* ===================== Task 12: Aether ===================== */
+
+  aetherSettings: (() => {
+    // Single-blob persistence (memento-aether-settings) merged over the
+    // defaults so settings saved by OLDER app versions (missing newer keys)
+    // still load cleanly — the same forward-compat pattern as the configs.
+    try {
+      const saved = localStorage.getItem("memento-aether-settings");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...DEFAULT_AETHER_SETTINGS, ...parsed };
+      }
+    } catch { /* fall through to defaults */ }
+    return { ...DEFAULT_AETHER_SETTINGS };
+  })(),
+  aetherStatus: "disconnected",
+  aetherInfo: null,
+  aetherAttempt: 0,
+  // Approved decision: system proxy defaults OFF for the Aether connection.
+  aetherSystemProxy: false,
+  // Phase B2: the routing segment defaults to the pre-B2 behavior.
+  aetherMode: (() => {
+    try {
+      const v = localStorage.getItem("memento-aether-mode");
+      if (v === "vpn-device" || v === "socks") return v as AetherRoutingMode;
+    } catch { /* fall through to the default */ }
+    return "socks" as AetherRoutingMode;
+  })(),
+  routingView: null,
+
+  setAetherSettings: (patch) => {
+    set(state => {
+      const next = { ...state.aetherSettings, ...patch };
+      try { localStorage.setItem("memento-aether-settings", JSON.stringify(next)); } catch { /* ignore */ }
+      return { aetherSettings: next };
+    });
+  },
+
+  setAetherState: (patch) => set(patch),
+
+  setAetherMode: (mode) => {
+    try { localStorage.setItem("memento-aether-mode", mode); } catch { /* ignore */ }
+    set({ aetherMode: mode });
+  },
+
+  setRoutingView: (v) => set({ routingView: v }),
+
   setTheme: (theme) => {
-    localStorage.setItem("v2ray-editor-theme", theme);
+    try { localStorage.setItem("v2ray-editor-theme", theme); } catch { /* storage unavailable (private mode/quota) — ignore */ }
     set({ theme });
   },
 
   toggleTheme: () => {
     const current = get().theme;
     const next = current === "dark" ? "light" : "dark";
-    localStorage.setItem("v2ray-editor-theme", next);
+    try { localStorage.setItem("v2ray-editor-theme", next); } catch { /* storage unavailable — ignore */ }
     set({ theme: next });
   },
 
   setLanguage: (lang) => {
-    localStorage.setItem("v2ray-editor-language", lang);
+    try { localStorage.setItem("v2ray-editor-language", lang); } catch { /* storage unavailable — ignore */ }
     set({ language: lang });
+    // Phase D4: the tray menu + the one-time close balloon render in the
+    // MAIN process, which has no access to localStorage — sync the UI
+    // language into memento-app-prefs.json (fire-and-forget; ipc.ts
+    // serializes concurrent app_prefs_set patches, so this can never race
+    // with a Settings-tab toggle). Browser preview: no shell, skipped.
+    try {
+      (window as any).electronAPI?.invoke("app_prefs_set", { patch: { language: lang } })?.catch(() => {});
+    } catch { /* browser preview — nothing to sync */ }
   },
 
   setNotificationMode: (mode) => {
-    localStorage.setItem("v2ray-editor-notification", mode);
+    try { localStorage.setItem("v2ray-editor-notification", mode); } catch { /* storage unavailable — ignore */ }
     set({ notificationMode: mode });
   },
 
   addConfigs: (rawLinks) => {
-    const existingRaws = new Set(get().configs.map(c => c.raw));
+    // R3 task #5 — IDENTITY-based dedupe (fixes the "subscription update
+    // duplicates every config" bug). The old code compared RAW strings;
+    // panels regenerate remarks/param-order on every update, so the raw
+    // strings differed and every update re-imported the whole list.
+    // Now: same canonical endpoint identity -> refresh IN PLACE (the id,
+    // the group memberships and the ping history survive); genuinely new
+    // endpoints -> appended; anything seen before (in the batch or in the
+    // table) -> skipped.
+    const existing = get().configs;
+    const identityToIndex = new Map<string, number>();
+    existing.forEach((c, i) => {
+      const id = c.raw ? configIdentity(c.raw) : "";
+      if (id && !identityToIndex.has(id)) identityToIndex.set(id, i);
+    });
+
+    const updated = [...existing];
     const newConfigs: ParsedConfig[] = [];
+    const batchSeen = new Set<string>();
+    let refreshed = 0;
 
     for (const link of rawLinks) {
       const decoded = decodeSubscription(link);
       for (const single of decoded) {
-        if (!single || existingRaws.has(single)) continue;
-        existingRaws.add(single);
+        if (!single) continue;
+        const identity = configIdentity(single);
+        if (identity) {
+          if (batchSeen.has(identity)) continue;
+          batchSeen.add(identity);
+        }
         const parsed = parseSingleLink(single);
-        newConfigs.push(parsed);
+        const idx = identity ? identityToIndex.get(identity) : undefined;
+        if (idx !== undefined) {
+          // Same endpoint — refresh the stored fields, KEEP the identity
+          // (id) so groups and ping results stay attached to it.
+          const old = updated[idx];
+          updated[idx] = { ...parsed, id: old.id };
+          refreshed++;
+        } else {
+          if (identity) identityToIndex.set(identity, updated.length);
+          updated.push(parsed);
+          newConfigs.push(parsed);
+        }
       }
     }
 
-    if (newConfigs.length > 0) {
-      const updated = [...get().configs, ...newConfigs];
+    if (newConfigs.length > 0 || refreshed > 0) {
       set({ configs: updated });
       saveConfigs(updated);
     }

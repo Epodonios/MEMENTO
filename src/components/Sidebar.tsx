@@ -5,7 +5,8 @@ import { t } from "../i18n";
 import { ClearAllModal } from "./SubscriptionGroups";
 import {
   Download, Table, Trash2, Eye, Wand2, HeartHandshake, Coffee,
-  Activity, Radar, Share2, Bell, BellOff, Volume2, BellRing, Shield
+  Activity, Radar, Share2, Bell, BellOff, Volume2, BellRing, Shield, Orbit,
+  Settings, Route, RefreshCcw, Globe, MonitorDot
 } from "lucide-react";
 
 const tabs = [
@@ -15,7 +16,16 @@ const tabs = [
   { id: "editor", label: "tab.editor", icon: Wand2, color: "from-teal-400 to-emerald-600" },
   { id: "pinger", label: "tab.pinger", icon: Activity, color: "from-emerald-400 to-teal-600" },
   { id: "scanner", label: "tab.scanner", icon: Radar, color: "from-emerald-400 via-green-500 to-emerald-600" },
+  { id: "routing", label: "tab.routing", icon: Route, color: "from-teal-400 via-emerald-400 to-green-500" },
   { id: "export", label: "tab.export", icon: Share2, color: "from-green-400 to-emerald-500" },
+  { id: "aether", label: "tab.aether", icon: Orbit, color: "from-teal-400 via-emerald-400 to-green-600" },
+  // R3: the Update Center, GOOGLE SIDE (in-app MHRV) and Live Connection.
+  { id: "updatecenter", label: "tab.updatecenter", icon: RefreshCcw, color: "from-emerald-400 to-teal-600" },
+  { id: "googleside", label: "tab.googleside", icon: Globe, color: "from-lime-400 via-emerald-400 to-green-600" },
+  { id: "liveconn", label: "tab.liveconn", icon: MonitorDot, color: "from-emerald-300 via-green-400 to-teal-600" },
+  // Phase D4: the dedicated Settings tab (final home of App Options + the
+  // new Close-to-tray toggle).
+  { id: "settings", label: "tab.settings", icon: Settings, color: "from-emerald-300 via-teal-400 to-emerald-600" },
   { id: "donate", label: "tab.donate", icon: Coffee, color: "from-yellow-400 to-amber-600" },
   { id: "contact", label: "tab.contact", icon: HeartHandshake, color: "from-red-400 to-pink-600" },
 ];

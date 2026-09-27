@@ -113,7 +113,7 @@ export function extractIpFromConfig(
       let padded = encoded; if (padded.length % 4 > 0) padded += "=".repeat(4 - (padded.length % 4));
       const json = atob(padded); const obj = JSON.parse(json);
       return { ip: obj.add, port: String(obj.port), protocol, name: obj.ps };
-    } else if (["vless", "trojan", "hysteria2", "hy2", "tuic"].includes(protocol)) {
+    } else if (["vless", "trojan", "hysteria2", "hy2", "tuic", "shadowtls"].includes(protocol)) {
       const urlPart = link.split("://")[1];
       const hashIdx = urlPart.lastIndexOf("#");
       const name = hashIdx > -1 ? decodeURIComponent(urlPart.slice(hashIdx + 1)) : "";
@@ -130,6 +130,32 @@ export function extractIpFromConfig(
       const hostPart = corePart.slice(atIdx + 1); const colonIdx = hostPart.lastIndexOf(":");
       const ip = hostPart.slice(0, colonIdx); const port = hostPart.slice(colonIdx + 1);
       return { ip, port, protocol, name };
+    } else if (protocol === "socks") {
+      // Task 13 (A1): socks://[userinfo@]host:port[#name] — URI form and the
+      // legacy whole-string base64("user:pass@host:port") shape.
+      let body = link.split("://")[1] || "";
+      const hashIdx = body.lastIndexOf("#");
+      const name = hashIdx > -1 ? decodeURIComponent(body.slice(hashIdx + 1)) : "";
+      let corePart = hashIdx > -1 ? body.slice(0, hashIdx) : body;
+      const queryIdx = corePart.indexOf("?");
+      if (queryIdx > -1) corePart = corePart.slice(0, queryIdx);
+      const atIdx = corePart.lastIndexOf("@");
+      let hostPart = atIdx > -1 ? corePart.slice(atIdx + 1) : corePart;
+      if (atIdx === -1 && !hostPart.includes(":")) {
+        try {
+          let padded = hostPart.replace(/-/g, "+").replace(/_/g, "/");
+          if (padded.length % 4 > 0) padded += "=".repeat(4 - (padded.length % 4));
+          const decoded = atob(padded);
+          const dAt = decoded.lastIndexOf("@");
+          if (dAt > -1) hostPart = decoded.slice(dAt + 1);
+        } catch { /* falls through -> null below */ }
+      }
+      const colonIdx = hostPart.lastIndexOf(":");
+      if (colonIdx === -1) return null;
+      const ip = hostPart.slice(0, colonIdx);
+      const port = hostPart.slice(colonIdx + 1);
+      if (!ip || !/^\d+$/.test(port)) return null;
+      return { ip, port, protocol, name };
     }
   } catch { return null; }
   return null;
@@ -142,7 +168,12 @@ function detectConfigProtocol(link: string): string {
   if (l.startsWith("trojan://")) return "trojan";
   if (l.startsWith("ss://")) return "ss";
   if (l.startsWith("ssr://")) return "ssr";
+  if (l.startsWith("socks://") || l.startsWith("socks5://")) return "socks";
   if (l.startsWith("hysteria2://") || l.startsWith("hy2://")) return "hysteria2";
   if (l.startsWith("tuic://")) return "tuic";
+  // Task E2: the MEMENTO ShadowTLS scheme (proprietary — parsed by
+  // parseShadowTLS in store.ts; the URI shape is creds@host:port so the
+  // generic branch above extracts the ping target unchanged).
+  if (l.startsWith("memento-stls://")) return "shadowtls";
   return "unknown";
 }
